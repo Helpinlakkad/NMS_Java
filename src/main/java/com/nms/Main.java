@@ -5,13 +5,11 @@ import com.nms.repository.DiscoveryRepository;
 import com.nms.routes.RouteRegistry;
 import com.nms.verticles.DatabaseVerticle;
 import io.vertx.core.AbstractVerticle;
-import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.handler.BodyHandler;
-import io.vertx.sqlclient.Pool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,21 +43,13 @@ public class MainVerticle extends AbstractVerticle {
         vertx.deployVerticle(databaseVerticle)
                 .compose(id -> {
 
+                    // Wait until DB pool initialized
+
                     LOG.info("✅ DatabaseVerticle deployed with id {}", id);
 
+                    CredentialRepository credentialRepository = new CredentialRepository(vertx);
 
-                    // Wait until DB pool initialized
-                    Pool pool = databaseVerticle.getPool();
-
-                    if (pool == null) {
-
-                        return Future.failedFuture("Database pool not initialized");
-
-                    }
-
-                    CredentialRepository credentialRepository = new CredentialRepository(pool);
-
-                    DiscoveryRepository discoveryRepository = new DiscoveryRepository(pool);
+                    DiscoveryRepository discoveryRepository = new DiscoveryRepository(vertx);
 
                     // --- Setup Routers ---
 
