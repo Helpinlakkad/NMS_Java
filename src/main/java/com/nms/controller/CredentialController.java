@@ -47,7 +47,7 @@ public class CredentialController {
 
             var encryptedPassword = BCrypt.hashpw(password, BCrypt.gensalt(10));
 
-            repository.createCredential(credentialProfileName, protocol, userName, password)
+            repository.createCredential(credentialProfileName, protocol, userName, encryptedPassword)
                     .onSuccess(res -> {
 
                         LOG.info("Received Profile Credentials -> credentialProfileName: {} , Protocol: {} , userName: {} , Password: {}",
@@ -122,7 +122,7 @@ public class CredentialController {
 
             var id = body.getInteger("id");
 
-            var profileName = body.getString("profile_name");
+            var credentialProfileName = body.getString("credentialProfileName");
 
             var protocol = body.getString("protocol");
 
@@ -150,7 +150,7 @@ public class CredentialController {
 
             }
 
-            repository.updateCredential(id, profileName, protocol, userName, encryptedPassword)
+            repository.updateCredential(id, credentialProfileName, protocol, userName, encryptedPassword)
                     .onSuccess(updatedData -> {
 
                         LOG.info("Updated Credential ID {}: {}", id, updatedData);

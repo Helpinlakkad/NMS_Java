@@ -13,9 +13,9 @@ import io.vertx.ext.web.handler.BodyHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class MainVerticle extends AbstractVerticle {
+public class Main extends AbstractVerticle {
 
-    private static final Logger LOG = LoggerFactory.getLogger(MainVerticle.class);
+    private static final Logger LOG = LoggerFactory.getLogger(Main.class);
 
     private static final int PORT = 8888;
 
@@ -29,7 +29,7 @@ public class MainVerticle extends AbstractVerticle {
 
         });
 
-        vertx.deployVerticle(MainVerticle.class.getName());
+        vertx.deployVerticle(Main.class.getName());
 
     }
 
