@@ -1,6 +1,6 @@
 package com.nms.repository;
 
-import com.nms.verticles.DatabaseVerticle;
+import com.nms.config.AppConfig;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 import io.vertx.core.eventbus.Message;
@@ -27,14 +27,14 @@ public class CredentialRepository {
                 .put("userName", userName)
                 .put("encryptedPassword", encryptedPassword);
 
-        return vertx.eventBus().request(DatabaseVerticle.EB_CREATE_CREDENTIAL, body).mapEmpty();
+        return vertx.eventBus().request(AppConfig.EB_CREATE_CREDENTIAL, body).mapEmpty();
 
     }
 
     //get All credentials
     public Future<JsonArray> getAllCredentials() {
 
-        return vertx.eventBus().<JsonArray>request(DatabaseVerticle.EB_GET_ALL_CREDENTIALS, new JsonObject())
+        return vertx.eventBus().<JsonArray>request(AppConfig.EB_GET_ALL_CREDENTIALS, new JsonObject())
                 .map(Message::body);
 
     }
@@ -49,7 +49,7 @@ public class CredentialRepository {
                 .put("userName", userName)
                 .put("encryptedPassword", encryptedPassword);
 
-        return vertx.eventBus().<JsonObject>request(DatabaseVerticle.EB_UPDATE_CREDENTIAL, body)
+        return vertx.eventBus().<JsonObject>request(AppConfig.EB_UPDATE_CREDENTIAL, body)
                 .map(Message::body);
 
     }
@@ -60,7 +60,7 @@ public class CredentialRepository {
         JsonObject body = new JsonObject()
                 .put("id", id);
 
-        return vertx.eventBus().<JsonObject>request(DatabaseVerticle.EB_DELETE_CREDENTIAL, body)
+        return vertx.eventBus().<JsonObject>request(AppConfig.EB_DELETE_CREDENTIAL, body)
                 .map(Message::body);
 
     }

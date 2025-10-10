@@ -3,6 +3,7 @@ package com.nms;
 import com.nms.repository.CredentialRepository;
 import com.nms.repository.DiscoveryRepository;
 import com.nms.routes.RouteRegistry;
+import com.nms.services.DiscoveryService;
 import com.nms.verticles.DatabaseVerticle;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Promise;
@@ -51,6 +52,13 @@ public class Main extends AbstractVerticle {
 
                     DiscoveryRepository discoveryRepository = new DiscoveryRepository(vertx);
 
+                    DiscoveryService discoveryServiceVerticle = new DiscoveryService(credentialRepository, discoveryRepository);
+
+                    vertx.deployVerticle(discoveryServiceVerticle)
+                            .onSuccess(did -> LOG.info("✅ DiscoveryService deployed with id {}", did))
+                            .onFailure(err -> LOG.error("❌ Failed to deploy DiscoveryService: {}", err.getMessage()));
+
+
                     // --- Setup Routers ---
 
                     var mainRouter = Router.router(vertx);
@@ -77,7 +85,7 @@ public class Main extends AbstractVerticle {
 
                     // --- Attach routes ---
 
-                    new RouteRegistry(credentialRepository, discoveryRepository)
+                    new RouteRegistry(vertx, credentialRepository, discoveryRepository)
                             .attachAllRoutes(restAPI);
 
                     return vertx.createHttpServer()

@@ -1,6 +1,6 @@
 package com.nms.repository;
 
-import com.nms.verticles.DatabaseVerticle;
+import com.nms.config.AppConfig;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 import io.vertx.core.eventbus.Message;
@@ -8,6 +8,8 @@ import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.List;
 
 
 public class DiscoveryRepository {
@@ -31,16 +33,15 @@ public class DiscoveryRepository {
                 .put("hostIP", hostIP)
                 .put("port", port);
 
-        return vertx.eventBus().request(DatabaseVerticle.EB_CREATE_DISCOVERY, body)
+        return vertx.eventBus().request(AppConfig.EB_CREATE_DISCOVERY, body)
                 .mapEmpty();
 
     }
 
-
-    //get All Discovery
+    //Get All Discovery
     public Future<JsonArray> getAllDiscovery() {
 
-        return vertx.eventBus().<JsonArray>request(DatabaseVerticle.EB_GET_ALL_DISCOVERY, new JsonObject())
+        return vertx.eventBus().<JsonArray>request(AppConfig.EB_GET_ALL_DISCOVERY, new JsonObject())
                 .map(Message::body);
 
     }
@@ -61,11 +62,10 @@ public class DiscoveryRepository {
                 .put("hostIP", hostIP)
                 .put("port", port);
 
-        return vertx.eventBus().<JsonObject>request(DatabaseVerticle.EB_UPDATE_DISCOVERY, body)
+        return vertx.eventBus().<JsonObject>request(AppConfig.EB_UPDATE_DISCOVERY, body)
                 .map(Message::body);
 
     }
-
 
     //Delete Discovery
     public Future<JsonObject> deleteDiscovery(Integer id) {
@@ -79,8 +79,41 @@ public class DiscoveryRepository {
         var body = new JsonObject()
                 .put("id", id);
 
-        return vertx.eventBus().<JsonObject>request(DatabaseVerticle.EB_DELETE_DISCOVERY, body)
+        return vertx.eventBus().<JsonObject>request(AppConfig.EB_DELETE_DISCOVERY, body)
                 .map(Message::body);
+
+    }
+
+    //Get DiscoveryByID
+    public Future<JsonObject> getDiscoveryById(Integer id) {
+
+        if (id == null) {
+
+            return Future.failedFuture("Id can not be null.");
+
+        }
+
+        var body = new JsonObject()
+                .put("id", id);
+
+        return vertx.eventBus().<JsonObject>request(AppConfig.EB_GET_DISCOVERY_BY_ID, body)
+                .map(Message::body);
+
+    }
+
+    //Insert Discovery in discovery_Queue table batch wise
+    public Future<String> insertDiscoveryQueueBatch(List<JsonObject> batch) {
+
+        if (batch == null || batch.isEmpty()) {
+
+            return Future.failedFuture("No data to add.");
+
+        }
+
+        JsonArray batchArray = new JsonArray(batch);
+
+        return vertx.eventBus().request(AppConfig.EB_INSERT_DISCOVERY_QUEUE_BATCH, batchArray)
+                .map(Object::toString);
 
     }
 

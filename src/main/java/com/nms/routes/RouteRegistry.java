@@ -2,8 +2,10 @@ package com.nms.routes;
 
 import com.nms.controller.CredentialController;
 import com.nms.controller.DiscoveryController;
+import com.nms.controller.ServiceController;
 import com.nms.repository.CredentialRepository;
 import com.nms.repository.DiscoveryRepository;
+import io.vertx.core.Vertx;
 import io.vertx.ext.web.Router;
 
 public class RouteRegistry {
@@ -12,11 +14,15 @@ public class RouteRegistry {
 
     private final DiscoveryController discoveryController;
 
-    public RouteRegistry(CredentialRepository credentialRepository, DiscoveryRepository discoveryRepository) {
+    private final ServiceController serviceController;
+
+    public RouteRegistry(Vertx vertx, CredentialRepository credentialRepository, DiscoveryRepository discoveryRepository) {
 
         this.credentialController = new CredentialController(credentialRepository);
 
         this.discoveryController = new DiscoveryController(discoveryRepository);
+
+        this.serviceController = new ServiceController(vertx);
 
     }
 
@@ -41,6 +47,12 @@ public class RouteRegistry {
         restAPI.patch("/updateDiscovery").handler(discoveryController::updateDiscovery);
 
         restAPI.delete("/deleteDiscovery").handler(discoveryController::deleteDiscovery);
+
+        restAPI.get("/getDiscovery/:discoveryProfileId").handler(discoveryController::getDiscoveryById);
+
+        // ---- SERVICE ROUTES ----
+
+        restAPI.get("/startDiscovery/:discoveryProfileId").handler(serviceController::startDiscoveryByDiscoveryId);
 
 
     }

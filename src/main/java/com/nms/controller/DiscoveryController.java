@@ -73,7 +73,7 @@ public class DiscoveryController {
 
     }
 
-    //get All Discovery
+    //Get All Discovery
     public void getAllDiscovery(RoutingContext routingContext) {
 
         discoveryRepository.getAllDiscovery()
@@ -203,6 +203,50 @@ public class DiscoveryController {
 
             routingContext.response()
                     .setStatusCode(500)
+                    .end(new JsonObject().put("error", "Invalid Request").toBuffer());
+
+        }
+
+    }
+
+    //Get DiscoveryById
+    public void getDiscoveryById(RoutingContext routingContext) {
+
+        try {
+
+            var id = routingContext.pathParam("discoveryProfileId");
+
+            if (id == null) {
+
+                throw new Exception("Id can not null.");
+
+            }
+
+            discoveryRepository.getDiscoveryById(Integer.valueOf(id))
+                    .onSuccess(data -> {
+                        LOG.info("Discovery for Id - {} : {}", id, data);
+
+                        routingContext.response().end(
+                                new JsonObject()
+                                        .put("status", "success")
+                                        .put("data", data).toBuffer());
+                    })
+                    .onFailure(err -> {
+
+                        LOG.error("Failed to get Discovery", err);
+
+                        routingContext.response()
+                                .setStatusCode(400)
+                                .end(new JsonObject().put("error", "Failed to get Discovery").toBuffer());
+
+                    });
+
+        } catch (Exception e) {
+
+            LOG.error("Error processing request / Invalid Request : {}", e.getMessage());
+
+            routingContext.response()
+                    .setStatusCode(400)
                     .end(new JsonObject().put("error", "Invalid Request").toBuffer());
 
         }

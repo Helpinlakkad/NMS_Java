@@ -1,5 +1,6 @@
 package com.nms.verticles;
 
+import com.nms.config.AppConfig;
 import com.nms.config.DatabaseConfig;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Promise;
@@ -14,28 +15,13 @@ import io.vertx.sqlclient.Tuple;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.List;
+
 public class DatabaseVerticle extends AbstractVerticle {
 
     private static final Logger LOG = LoggerFactory.getLogger(DatabaseVerticle.class);
 
     private Pool pool;
-
-    // Event bus addresses
-    public static final String EB_CREATE_CREDENTIAL = "db.credential.create";
-
-    public static final String EB_GET_ALL_CREDENTIALS = "db.credential.getAll";
-
-    public static final String EB_UPDATE_CREDENTIAL = "db.credential.update";
-
-    public static final String EB_DELETE_CREDENTIAL = "db.credential.delete";
-
-    public static final String EB_CREATE_DISCOVERY = "db.discovery.create";
-
-    public static final String EB_GET_ALL_DISCOVERY = "db.discovery.getAll";
-
-    public static final String EB_UPDATE_DISCOVERY = "db.discovery.update";
-
-    public static final String EB_DELETE_DISCOVERY = "db.discovery.delete";
 
     @Override
     public void start(Promise<Void> startPromise) {
@@ -73,23 +59,29 @@ public class DatabaseVerticle extends AbstractVerticle {
 
     private void registerEventBusHandlers() {
 
-        vertx.eventBus().consumer(EB_CREATE_CREDENTIAL, this::handleCreateCredential);
+        vertx.eventBus().consumer(AppConfig.EB_CREATE_CREDENTIAL, this::handleCreateCredential);
 
-        vertx.eventBus().consumer(EB_GET_ALL_CREDENTIALS, this::handleGetAllCredentials);
+        vertx.eventBus().consumer(AppConfig.EB_GET_ALL_CREDENTIALS, this::handleGetAllCredentials);
 
-        vertx.eventBus().consumer(EB_UPDATE_CREDENTIAL, this::handleUpdateCredential);
+        vertx.eventBus().consumer(AppConfig.EB_UPDATE_CREDENTIAL, this::handleUpdateCredential);
 
-        vertx.eventBus().consumer(EB_DELETE_CREDENTIAL, this::handleDeleteCredential);
+        vertx.eventBus().consumer(AppConfig.EB_DELETE_CREDENTIAL, this::handleDeleteCredential);
 
-        vertx.eventBus().consumer(EB_CREATE_DISCOVERY, this::handleCreateDiscovery);
+        vertx.eventBus().consumer(AppConfig.EB_CREATE_DISCOVERY, this::handleCreateDiscovery);
 
-        vertx.eventBus().consumer(EB_GET_ALL_DISCOVERY, this::handleGetAllDiscovery);
+        vertx.eventBus().consumer(AppConfig.EB_GET_ALL_DISCOVERY, this::handleGetAllDiscovery);
 
-        vertx.eventBus().consumer(EB_UPDATE_DISCOVERY, this::handleUpdateDiscovery);
+        vertx.eventBus().consumer(AppConfig.EB_UPDATE_DISCOVERY, this::handleUpdateDiscovery);
 
-        vertx.eventBus().consumer(EB_DELETE_DISCOVERY, this::handleDeleteDiscovery);
+        vertx.eventBus().consumer(AppConfig.EB_DELETE_DISCOVERY, this::handleDeleteDiscovery);
+
+        vertx.eventBus().consumer(AppConfig.EB_GET_DISCOVERY_BY_ID, this::handleGetDiscoveryById);
+
+        vertx.eventBus().consumer(AppConfig.EB_INSERT_DISCOVERY_QUEUE_BATCH, this::handleInsertDiscoveryQueueBatch);
 
     }
+
+    //Credential Handlers
 
     private void handleCreateCredential(Message<JsonObject> msg) {
 
@@ -121,9 +113,9 @@ public class DatabaseVerticle extends AbstractVerticle {
 
                         resultArray.add(new JsonObject()
                                 .put("id", row.getInteger("id"))
-                                .put("profile_name", row.getString("profile_name"))
+                                .put("credentialProfileName", row.getString("profile_name"))
                                 .put("protocol", row.getString("protocol"))
-                                .put("username", row.getString("username"))
+                                .put("userName", row.getString("username"))
                                 .put("password", row.getString("password")));
 
                     }
@@ -206,9 +198,9 @@ public class DatabaseVerticle extends AbstractVerticle {
 
                         JsonObject result = new JsonObject()
                                 .put("id", row.getInteger("id"))
-                                .put("profile_name", row.getString("profile_name"))
+                                .put("credentialProfileName", row.getString("profile_name"))
                                 .put("protocol", row.getString("protocol"))
-                                .put("username", row.getString("username"))
+                                .put("userName", row.getString("username"))
                                 .put("password", row.getString("password"));
 
                         msg.reply(result);
@@ -267,6 +259,8 @@ public class DatabaseVerticle extends AbstractVerticle {
     }
 
 
+    //Discovery Handlers
+
     private void handleCreateDiscovery(Message<JsonObject> msg) {
 
         var body = msg.body();
@@ -296,8 +290,8 @@ public class DatabaseVerticle extends AbstractVerticle {
                     for (Row row : rowSet) {
                         responseArray.add(new JsonObject()
                                 .put("id", row.getInteger("id"))
-                                .put("discovery_name", row.getString("discovery_name"))
-                                .put("credential_profiles", new JsonArray(row.getString("credential_profiles")))
+                                .put("discoveryProfileName", row.getString("discovery_name"))
+                                .put("credentialProfileNames", new JsonArray(row.getString("credential_profiles")))
                                 .put("hostIP", row.getString("host_ip"))
                                 .put("port", row.getInteger("port")));
                     }
@@ -433,6 +427,88 @@ public class DatabaseVerticle extends AbstractVerticle {
                         msg.fail(404, "No record found for given ID");
 
                     }
+
+                })
+                .onFailure(err -> msg.fail(500, err.getMessage()));
+
+    }
+
+    private void handleGetDiscoveryById(Message<JsonObject> msg) {
+
+        var body = msg.body();
+
+        var discoveryProfileId = body.getInteger("id");
+
+        if (discoveryProfileId == null) {
+
+            msg.fail(400, "id is required");
+
+            return;
+
+        }
+
+        var sql = "SELECT * FROM discovery where id = $1";
+
+        pool.preparedQuery(sql)
+                .execute(Tuple.of(discoveryProfileId))
+                .onSuccess(rowSet -> {
+
+                    if (rowSet.rowCount() > 0) {
+
+                        Row row = rowSet.iterator().next();
+
+                        JsonObject result = new JsonObject()
+                                .put("id", row.getInteger("id"))
+                                .put("discoveryProfileName", row.getString("discovery_name"))
+                                .put("credentialProfileNames", new JsonArray(row.getString("credential_profiles")))
+                                .put("hostIP", row.getString("host_ip"))
+                                .put("port", row.getInteger("port"));
+
+                        msg.reply(result);
+
+                    } else {
+
+                        msg.fail(404, "Discovery not found for id=" + discoveryProfileId);
+
+                    }
+                })
+                .onFailure(err -> msg.fail(50, err.getMessage()));
+
+    }
+
+    private void handleInsertDiscoveryQueueBatch(Message<JsonArray> msg) {
+
+        JsonArray batch = msg.body();
+
+        String sql = """
+                INSERT INTO discovery_queue(
+                    discovery_id, device_ip, port, status, matched_credentials
+                ) VALUES ($1, $2, $3, $4::text, $5::jsonb)
+                ON CONFLICT (discovery_id, device_ip)
+                        DO UPDATE SET
+                            port = EXCLUDED.port,
+                            status = EXCLUDED.status,
+                            matched_credentials = EXCLUDED.matched_credentials,
+                            updated_at = now()
+                """;
+
+        List<Tuple> tuples = batch.stream()
+                .map(obj -> (JsonObject) obj)
+                .map(json -> Tuple.of(
+                        json.getInteger("discovery_id"),
+                        json.getString("device_ip"),
+                        json.getInteger("port"),
+                        json.getString("status"),
+                        json.getJsonArray("matched_credentials").encode()
+
+                ))
+                .toList();
+
+        pool.preparedQuery(sql)
+                .executeBatch(tuples)
+                .onSuccess(res -> {
+
+                    msg.reply("Queue Entries Inserted.");
 
                 })
                 .onFailure(err -> msg.fail(500, err.getMessage()));
