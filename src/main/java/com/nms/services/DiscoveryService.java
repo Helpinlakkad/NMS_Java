@@ -14,7 +14,6 @@ import org.slf4j.LoggerFactory;
 import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
 
 
 public class DiscoveryService extends AbstractVerticle {
@@ -26,6 +25,8 @@ public class DiscoveryService extends AbstractVerticle {
     private final DiscoveryRepository discoveryRepository;
 
     private static final int BATCH_SIZE = 50;
+
+    private static final int MAX_RETRIES = 3;
 
     public DiscoveryService(CredentialRepository credentialRepository, DiscoveryRepository discoveryRepository) {
 
@@ -49,14 +50,14 @@ public class DiscoveryService extends AbstractVerticle {
             LOG.info("Received discovery start event for ID {}", discoveryId);
 
             startDiscovery(Integer.parseInt(discoveryId))
-                    .onSuccess(result -> {
+                    .onSuccess(reachableDevices -> {
 
-                        LOG.info("✅ Discovery completed for ID {}", discoveryId);
+                        LOG.info("✅ Discovery completed for ID {}. Total Reachable Devices : {}", discoveryId, reachableDevices.size());
 
                         JsonObject response = new JsonObject()
                                 .put("discoveryId", discoveryId)
-                                .put("totalReachable", result.size())
-                                .put("reachableDevices", new JsonArray(result))
+                                .put("totalReachable", reachableDevices.size())
+                                .put("reachableDevices", reachableDevices)
                                 .put("timestamp", System.currentTimeMillis());
 
                         message.reply(response);
@@ -78,9 +79,9 @@ public class DiscoveryService extends AbstractVerticle {
 
     // Starts discovery for a specific discoveryId.
 
-    public Future<List<JsonObject>> startDiscovery(int discoveryId) {
+    public Future<JsonArray> startDiscovery(int discoveryId) {
 
-        Promise<List<JsonObject>> promise = Promise.promise();
+        Promise<JsonArray> promise = Promise.promise();
 
         discoveryRepository.getDiscoveryById(discoveryId)
                 .compose(discoveryProfileData -> {
@@ -100,8 +101,18 @@ public class DiscoveryService extends AbstractVerticle {
                     var credentialProfileNames = discoveryProfileData.getJsonArray("credentialProfileNames");
 
 
+                    // Step 1: Get all credentials
                     return credentialRepository.getAllCredentials()
-                            .compose(allCreds -> processDevicesInBatches(discoveryId, hostIPs, port, credentialProfileNames, allCreds));
+                            .compose(allCreds ->
+                                    // Step 2: Enqueue devices into discovery_queue
+                                    enqueueDevices(discoveryId, hostIPs, port, credentialProfileNames).map(allCreds))
+                            .compose(allCreds ->
+                                    // Step 3: Process queue in batches
+                                    processDiscoveryQueue(discoveryId, allCreds, credentialProfileNames))
+                            .compose(v ->
+                                    //Step 4: Fetch Reachable devices from DB
+                                    discoveryRepository.getAllReachableDevices(discoveryId)
+                            );
 
                 })
                 .onSuccess(promise::complete)
@@ -117,231 +128,228 @@ public class DiscoveryService extends AbstractVerticle {
 
     }
 
-    //  Process devices in batches: ping/TCP check and create discovery queue.
+    //Enqueue devices into discovery_queue with PENDING status
 
-    private Future<List<JsonObject>> processDevicesInBatches(int discoveryId, JsonArray hostIPs, int port, JsonArray credentialProfileNames, JsonArray allCreds) {
-
-        Promise<List<JsonObject>> promise = Promise.promise();
+    private Future<Void> enqueueDevices(int discoveryId, JsonArray hostIPs, int port, JsonArray credentialProfileNames) {
 
         List<Future<Void>> batchFutures = new ArrayList<>();
 
-        List<JsonObject> allReachableDevices = new CopyOnWriteArrayList<>();
+        int total = hostIPs.size();
 
-        for (int i = 0; i < hostIPs.size(); i += BATCH_SIZE) {
+        for (int from = 0; from < total; from += BATCH_SIZE) {
 
-            Promise<Void> batchPromise = Promise.promise();
+            int to = Math.min(from + BATCH_SIZE, total);
 
-            batchFutures.add(batchPromise.future());
+            List<JsonObject> batch = new ArrayList<>();
 
-            int end = Math.min(i + BATCH_SIZE, hostIPs.size());
+            for (int i = from; i < to; i++) {
 
-            List<String> batchDevicesIP = new CopyOnWriteArrayList<>();
-
-            for (int j = i; j < end; j++) {
-
-                batchDevicesIP.add(hostIPs.getString(j));
+                batch.add(new JsonObject()
+                        .put("discovery_id", discoveryId)
+                        .put("device_ip", hostIPs.getString(i))
+                        .put("port", port)
+                        .put("protocol", "SSH")
+                        .put("status", "PENDING")
+                        .put("max_retries", MAX_RETRIES)
+                        .put("matched_credentials", credentialProfileNames)
+                );
 
             }
 
-            List<JsonObject> batchQueue = new CopyOnWriteArrayList<>();
+            int finalFrom = from + 1;
 
-            List<Future<Void>> tcpFutures = new ArrayList<>();
-
-            // Batch execution of ping (Blocking Operation)
-
-            vertx.executeBlocking(() -> {
-
-                        List<String> pingFailedDevices = new ArrayList<>();
-
-                        for (String hostIP : batchDevicesIP) {
-
-                            List<String> matchedCredentialNames = allCreds.stream()
-                                    .map(cred -> (JsonObject) cred)
-                                    .filter(cred -> credentialProfileNames.contains(cred.getString("credentialProfileName")))
-                                    .map(cred -> cred.getString("credentialProfileName"))
-                                    .distinct()
-                                    .toList();
-
-                            if (matchedCredentialNames.isEmpty()) {
-
-                                LOG.warn("No credentials matched for device {} in discovery {}", hostIP, discoveryId);
-
-                            }
-
-                            boolean pingReachable = isPingReachable(hostIP);
-
-                            if (pingReachable) {
-
-                                JsonObject queueEntry = new JsonObject()
-                                        .put("discovery_id", discoveryId)
-                                        .put("device_ip", hostIP)
-                                        .put("port", port)
-//                                    .put("protocol", cred.getString("protocol"))
-                                        .put("status", "REACHABLE")
-                                        .put("matched_credentials", new JsonArray(matchedCredentialNames));
-
-                                batchQueue.add(queueEntry);
-
-                            } else {
-
-                                pingFailedDevices.add(hostIP);
-
-                            }
-
-                        }
-
-                        return pingFailedDevices;
-
-                    })
-                    .onComplete(pingRes -> {
-
-                        if (pingRes.succeeded()) {
-
-                            List<String> pingFailedDevicesIP = pingRes.result();
-
-                            for (String hostIP : pingFailedDevicesIP) {
-
-                                List<String> matchedCredentialNames = allCreds.stream()
-                                        .map(cred -> (JsonObject) cred)
-                                        .filter(cred -> credentialProfileNames.contains(cred.getString("credentialProfileName")))
-                                        .map(cred -> cred.getString("credentialProfileName"))
-                                        .distinct()
-                                        .toList();
-
-                                Future<Void> tcpFuture = isTcpReachable(hostIP, port)
-                                        .onComplete(tcpRes -> {
-
-                                            boolean tcpReachable = tcpRes.succeeded();
-
-                                            JsonObject queueEntry = new JsonObject()
-                                                    .put("discovery_id", discoveryId)
-                                                    .put("device_ip", hostIP)
-                                                    .put("port", port)
-//                                    .put("protocol", cred.getString("protocol"))
-                                                    .put("status", tcpReachable ? "REACHABLE" : "UNREACHABLE")
-                                                    .put("matched_credentials", new JsonArray(matchedCredentialNames));
-
-                                            batchQueue.add(queueEntry);
-
-                                        });
-
-                                tcpFutures.add(tcpFuture);
-
-                            }
-
-                            // After all async TCP checks finish, insert batch to DB
-
-                            if (tcpFutures.isEmpty()) {
-
-                                insertBatchToDB(batchQueue)
-                                        .onSuccess(ar -> {
-
-                                            if (!batchQueue.isEmpty()) {
-
-                                                batchQueue.stream()
-                                                        .filter(entry -> "REACHABLE".equals(entry.getString("status")))
-                                                        .forEach(allReachableDevices::add);
-
-                                            }
-
-                                            batchPromise.complete();
-
-                                        })
-                                        .onFailure(err -> batchPromise.fail(err.getMessage()));
-                            } else {
-
-                                Future.all(tcpFutures).onComplete(res -> {
-
-                                    insertBatchToDB(batchQueue)
-                                            .onSuccess(ar -> {
-
-                                                if (!batchQueue.isEmpty()) {
-
-                                                    batchQueue.stream()
-                                                            .filter(entry -> "REACHABLE".equals(entry.getString("status")))
-                                                            .forEach(allReachableDevices::add);
-
-                                                }
-
-                                                batchPromise.complete();
-
-                                            })
-                                            .onFailure(err -> batchPromise.fail(err.getMessage()));
-
-
-                                });
-                            }
-
-                        } else {
-
-                            LOG.error("Error processing ping/TCP batch: {}", pingRes.cause().getMessage());
-
-                            batchPromise.fail(pingRes.cause());
-
-                        }
-
-                    });
+            batchFutures.add(
+                    discoveryRepository.insertDiscoveryQueueBatch(batch)
+                            .onSuccess(v -> LOG.info("Inserted batch {}-{} into discovery_queue", finalFrom, to))
+                            .onFailure(err -> LOG.error("Failed to insert batch {}-{} in to discovery_queue : {}", finalFrom, to, err.getMessage()))
+                            .mapEmpty()
+            );
 
         }
 
-        Future.all(batchFutures)
+        return Future.all(batchFutures).mapEmpty();
+
+    }
+
+    //  Process Discovery Queue in batches
+
+    private Future<Void> processDiscoveryQueue(int discoveryId, JsonArray allCreds, JsonArray credentialProfileNames) {
+
+        Promise<Void> promise = Promise.promise();
+
+        processNextBatch(discoveryId, allCreds, credentialProfileNames)
                 .onComplete(ar -> {
-                    if (ar.succeeded()) {
-                        LOG.info("All batches processed for discovery {}", discoveryId);
-                        promise.complete(allReachableDevices); // <- send final reachable devices to caller
-                    } else {
-                        promise.fail(ar.cause());
-                    }
-                });
+                            if (ar.succeeded()) {
+
+                                promise.complete();
+
+                            } else {
+
+                                promise.fail(ar.cause());
+
+                            }
+                        }
+
+                );
 
         return promise.future();
 
     }
 
-    private Future<Void> insertBatchToDB(List<JsonObject> batchResult) {
+    // Recursive batch processing
 
-        List<Future<String>> insertFutures = new ArrayList<>();
+    private Future<Void> processNextBatch(int discoveryId, JsonArray allCreds, JsonArray credentialProfileNames) {
 
-        int total = batchResult.size();
+        Promise<Void> batchPromise = Promise.promise();
 
-        int from = 0;
+        // Fetch batch from DB with FOR UPDATE SKIP LOCKED
 
-        while (from < total) {
+        discoveryRepository.fetchPendingBatch(discoveryId, BATCH_SIZE)
+                .onSuccess(batch -> {
 
-            int to = Math.min(from + BATCH_SIZE, total);
+                    if (batch == null || batch.isEmpty()) {
 
-            List<JsonObject> batch = batchResult.subList(from, to);
+                        batchPromise.complete();
+
+                        return;
+
+                    }
+
+                    List<Future<Void>> futures = new ArrayList<>();
+
+                    for (Object device : batch) {
+
+                        JsonObject deviceAsJson = (JsonObject) device;
+
+                        String ip = deviceAsJson.getString("device_ip");
+
+                        int port = deviceAsJson.getInteger("port");
+
+                        LOG.info("device IP : {} and PORT : {}", ip, port);
+
+                        futures.add(checkDevice(ip, port, discoveryId, allCreds, credentialProfileNames, 0)
+                                .compose(deviceObj -> {
+
+                                    // Update discovery_queue status to REACHABLE/UNREACHABLE
+                                    return discoveryRepository.updateDiscoveryQueueStatus(discoveryId, ip, deviceObj.getString("status"))
+                                            .map(deviceObj);  // propagate deviceStatus
+
+                                })
+                                .onSuccess(deviceObj -> LOG.info("Device processed: {}", deviceObj))
+
+                                .onFailure(err -> LOG.error("Device failed {}: {}", ip, err.getMessage()))
+
+                                .mapEmpty()
+
+                        );
+
+                    }
+
+                    // When all devices in batch processed
+
+                    Future.all(futures)
+                            .onComplete(ar -> {
+
+                                if (ar.succeeded()) {
+
+                                    // Process next batch recursively
+                                    processNextBatch(discoveryId, allCreds, credentialProfileNames)
+                                            .onComplete(batchPromise);
+
+                                } else {
+
+                                    LOG.error("Batch failed: {}", ar.cause().getMessage());
+
+                                    batchPromise.fail(ar.cause());
+
+                                }
+
+                            });
+
+                })
+                .onFailure(batchPromise::fail);
 
 
-            var finalFrom = from + 1;
+        return batchPromise.future();
+    }
 
-            Future<String> batchFuture = discoveryRepository.insertDiscoveryQueueBatch(batch)
-                    .onSuccess(rep -> {
+    private Future<JsonObject> checkDevice(String ip, int port, int discoveryId, JsonArray allCreds, JsonArray credentialProfileNames, int retryCount) {
 
-                        LOG.info("Inserted batch {}-{} to discovery_queue", finalFrom, to);
+        Promise<JsonObject> promise = Promise.promise();
 
-                    })
-                    .onFailure(err -> {
+        List<String> matchedCredNames = allCreds.stream()
+                .map(c -> (JsonObject) c)
+                .filter(c -> credentialProfileNames.contains(c.getString("credentialProfileName")))
+                .map(c -> c.getString("credentialProfileName"))
+                .distinct()
+                .toList();
 
-                        LOG.error("Failed to insert batch {}-{}: {}", finalFrom, to, err.getMessage());
+        if (matchedCredNames.isEmpty()) {
 
-                    });
-
-            insertFutures.add(batchFuture);
-
-            from = to;
+            LOG.warn("No credentials matched for device {} in discovery {}", ip, discoveryId);
 
         }
 
-        return Future.all(insertFutures).mapEmpty();
+        vertx.executeBlocking(() -> isPingReachable(ip))
+                .compose(pingReachable -> {
+
+                    if (pingReachable) {
+
+                        // Ping succeeded → device is reachable
+                        return Future.succeededFuture("REACHABLE");
+
+                    }
+
+                    // Ping failed → check TCP asynchronously
+
+                    return isTcpReachable(ip, port)
+                            .map(tcpReachable -> tcpReachable ? "REACHABLE" : "UNREACHABLE");
+
+                })
+                .compose(status -> {
+
+                    var isFinalAttempt = ("REACHABLE".equals(status) || retryCount >= MAX_RETRIES);
+
+                    JsonObject deviceObj = new JsonObject()
+                            .put("discovery_id", discoveryId)
+                            .put("device_ip", ip)
+                            .put("port", port)
+                            .put("protocol", "SSH")
+                            .put("status", status)
+                            .put("matched_credentials", new JsonArray(matchedCredNames))
+                            .put("retry_count", retryCount)
+                            .put("max_retries", MAX_RETRIES);
+
+                    // Upsert discovered_devices table
+                    // Update DB only when final attempt reached
+
+                    if (isFinalAttempt) {
+
+                        return discoveryRepository.upsertDiscoveredDevice(deviceObj)
+                                .map(deviceObj);
+
+                    } else {
+
+                        LOG.info("Retrying device {} (retry {}/{})", ip, retryCount + 1, MAX_RETRIES);
+
+                        return checkDevice(ip, port, discoveryId, allCreds, credentialProfileNames, retryCount + 1);
+
+                    }
+
+                })
+                .onComplete(promise);
+
+        return promise.future();
 
     }
+
+    // Ping + TCP check
 
     private boolean isPingReachable(String hostIP) {
 
         try {
 
-            int timeout = 2000;
+            int timeout = 1000;
 
             return InetAddress.getByName(hostIP).isReachable(timeout);
 
@@ -355,9 +363,9 @@ public class DiscoveryService extends AbstractVerticle {
 
     }
 
-    private Future<Void> isTcpReachable(String ip, int port) {
+    private Future<Boolean> isTcpReachable(String ip, int port) {
 
-        Promise<Void> promise = Promise.promise();
+        Promise<Boolean> promise = Promise.promise();
 
         vertx.createNetClient().connect(port, ip)
                 .onComplete(res -> {
@@ -366,11 +374,11 @@ public class DiscoveryService extends AbstractVerticle {
 
                         res.result().close();
 
-                        promise.complete();
+                        promise.complete(true);
 
                     } else {
 
-                        promise.fail(res.cause());
+                        promise.complete(false);
 
                     }
 

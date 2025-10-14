@@ -90,7 +90,6 @@ public class CredentialController {
     //Get All Credentials
     public void getAllCredentials(RoutingContext routingContext) {
 
-
         repository.getAllCredentials()
                 .onSuccess(response -> {
 

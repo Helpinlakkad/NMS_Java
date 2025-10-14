@@ -5,8 +5,6 @@ import com.nms.repository.DiscoveryRepository;
 import com.nms.routes.RouteRegistry;
 import com.nms.services.DiscoveryService;
 import com.nms.verticles.DatabaseVerticle;
-import io.vertx.core.AbstractVerticle;
-import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
@@ -14,7 +12,7 @@ import io.vertx.ext.web.handler.BodyHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class Main extends AbstractVerticle {
+public class Main {
 
     private static final Logger LOG = LoggerFactory.getLogger(Main.class);
 
@@ -32,14 +30,14 @@ public class Main extends AbstractVerticle {
 
         vertx.deployVerticle(Main.class.getName());
 
-    }
-
-    @Override
-    public void start(Promise<Void> startPromise) {
 
         //first deploy database verticle
 
         DatabaseVerticle databaseVerticle = new DatabaseVerticle();
+
+        CredentialRepository credentialRepository = new CredentialRepository(vertx);
+
+        DiscoveryRepository discoveryRepository = new DiscoveryRepository(vertx);
 
         vertx.deployVerticle(databaseVerticle)
                 .compose(id -> {
@@ -48,17 +46,22 @@ public class Main extends AbstractVerticle {
 
                     LOG.info("✅ DatabaseVerticle deployed with id {}", id);
 
-                    CredentialRepository credentialRepository = new CredentialRepository(vertx);
-
-                    DiscoveryRepository discoveryRepository = new DiscoveryRepository(vertx);
-
                     DiscoveryService discoveryServiceVerticle = new DiscoveryService(credentialRepository, discoveryRepository);
 
-                    vertx.deployVerticle(discoveryServiceVerticle)
+                    // Wait for DiscoveryService deployment before continuing
+
+                    return vertx.deployVerticle(discoveryServiceVerticle)
                             .onSuccess(did -> LOG.info("✅ DiscoveryService deployed with id {}", did))
-                            .onFailure(err -> LOG.error("❌ Failed to deploy DiscoveryService: {}", err.getMessage()));
+                            .onFailure(err -> {
 
+                                LOG.error("❌ Failed to deploy DiscoveryService: {}", err.getMessage());
 
+                            });
+
+                })
+                .compose(id -> {
+                    // Now setup routers and start HTTP server AFTER DiscoveryService is deployed
+                    // Use the SAME repository instances
                     // --- Setup Routers ---
 
                     var mainRouter = Router.router(vertx);
@@ -102,13 +105,12 @@ public class Main extends AbstractVerticle {
 
                     LOG.info("✅ Application fully initialized");
 
-                    startPromise.complete();
                 })
                 .onFailure(err -> {
 
                     LOG.error("❌ Application startup failed: {}", err.getMessage(), err);
 
-                    startPromise.fail(err);
+                    vertx.close();
 
                 });
 

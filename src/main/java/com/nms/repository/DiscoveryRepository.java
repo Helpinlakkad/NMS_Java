@@ -117,4 +117,61 @@ public class DiscoveryRepository {
 
     }
 
+    /**
+     * Fetch a batch of pending devices for a discovery profile.
+     * Uses FOR UPDATE SKIP LOCKED to allow concurrent workers safely.
+     *
+     * @param discoveryId discovery profile ID
+     * @param batchSize   number of devices to fetch
+     * @return Future<JsonArray> containing pending devices
+     */
+
+    public Future<JsonArray> fetchPendingBatch(int discoveryId, int batchSize) {
+
+        JsonObject body = new JsonObject()
+                .put("discoveryId", discoveryId)
+                .put("batchSize", batchSize);
+
+        return vertx.eventBus().<JsonArray>request(AppConfig.EB_FETCH_PENDING_BATCH, body)
+                .map(Message::body);
+
+    }
+
+    public Future<JsonObject> upsertDiscoveredDevice(JsonObject deviceObj) {
+
+        return vertx.eventBus().<JsonObject>request(AppConfig.EB_UPSERT_DISCOVERED_DEVICE, deviceObj)
+                .map(Message::body);
+
+    }
+
+    public Future<Void> updateDiscoveryQueueStatus(int discoveryId, String deviceIp, String status) {
+
+        if (discoveryId <= 0 || deviceIp == null || status == null) {
+            return Future.failedFuture("Invalid Data Params");
+        }
+
+        JsonObject body = new JsonObject()
+                .put("discoveryId", discoveryId)
+                .put("deviceIp", deviceIp)
+                .put("status", status);
+
+        return vertx.eventBus().request(AppConfig.EB_UPDATE_DISCOVERY_QUEUE_STATUS, body).mapEmpty();
+    }
+
+    public Future<JsonArray> getAllReachableDevices(int discoveryId) {
+
+        if (discoveryId <= 0) {
+
+            return Future.failedFuture("Invalid discoveryId passed.");
+
+        }
+
+        JsonObject body = new JsonObject()
+                .put("discoveryId", discoveryId);
+
+        return vertx.eventBus().<JsonArray>request(AppConfig.EB_GET_ALL_REACHABLE_DEVICES, body)
+                .map(Message::body);
+
+    }
+
 }

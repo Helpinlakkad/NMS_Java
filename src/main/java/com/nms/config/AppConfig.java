@@ -27,4 +27,12 @@ public class AppConfig {
 
     public static final String EB_START_DISCOVERY = "start.discovery";
 
+    public static final String EB_FETCH_PENDING_BATCH = "fetch.pending.batch.devices";
+
+    public static final String EB_UPSERT_DISCOVERED_DEVICE = "insert.update.discovered.devices";
+
+    public static final String EB_UPDATE_DISCOVERY_QUEUE_STATUS = "update.discovery.queue.status";
+
+    public static final String EB_GET_ALL_REACHABLE_DEVICES = "get.all.reachable.devices";
+
 }

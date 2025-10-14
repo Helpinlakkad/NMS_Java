@@ -15,6 +15,7 @@ import io.vertx.sqlclient.Tuple;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class DatabaseVerticle extends AbstractVerticle {
@@ -78,6 +79,14 @@ public class DatabaseVerticle extends AbstractVerticle {
         vertx.eventBus().consumer(AppConfig.EB_GET_DISCOVERY_BY_ID, this::handleGetDiscoveryById);
 
         vertx.eventBus().consumer(AppConfig.EB_INSERT_DISCOVERY_QUEUE_BATCH, this::handleInsertDiscoveryQueueBatch);
+
+        vertx.eventBus().consumer(AppConfig.EB_FETCH_PENDING_BATCH, this::handleFetchPendingBatch);
+
+        vertx.eventBus().consumer(AppConfig.EB_UPSERT_DISCOVERED_DEVICE, this::handleUpsertDiscoveredDevice);
+
+        vertx.eventBus().consumer(AppConfig.EB_UPDATE_DISCOVERY_QUEUE_STATUS, this::handleUpdateDiscoveryQueueStatus);
+
+        vertx.eventBus().consumer(AppConfig.EB_GET_ALL_REACHABLE_DEVICES, this::handleGetAllReachableDevices);
 
     }
 
@@ -388,7 +397,7 @@ public class DatabaseVerticle extends AbstractVerticle {
 
                     }
                 })
-                .onFailure(err -> msg.fail(50, err.getMessage()));
+                .onFailure(err -> msg.fail(500, err.getMessage()));
 
     }
 
@@ -472,7 +481,7 @@ public class DatabaseVerticle extends AbstractVerticle {
 
                     }
                 })
-                .onFailure(err -> msg.fail(50, err.getMessage()));
+                .onFailure(err -> msg.fail(500, err.getMessage()));
 
     }
 
@@ -509,6 +518,194 @@ public class DatabaseVerticle extends AbstractVerticle {
                 .onSuccess(res -> {
 
                     msg.reply("Queue Entries Inserted.");
+
+                })
+                .onFailure(err -> msg.fail(500, err.getMessage()));
+
+    }
+
+    private void handleFetchPendingBatch(Message<JsonObject> msg) {
+
+        JsonObject body = msg.body();
+
+        int discoveryId = body.getInteger("discoveryId");
+
+        int batchSize = body.getInteger("batchSize");
+
+        String sql = """
+                    SELECT *
+                    FROM discovery_queue
+                    WHERE discovery_id = $1 AND status = 'PENDING'
+                    ORDER BY created_at
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT $2
+                """;
+
+        pool.withTransaction(tx ->
+
+                        tx.preparedQuery(sql)
+                                .execute(Tuple.of(discoveryId, batchSize))
+                                .map(rowSet -> {
+                                    JsonArray result = new JsonArray();
+                                    for (Row row : rowSet) {
+                                        result.add(new JsonObject()
+                                                .put("id", row.getLong("id"))
+                                                .put("discovery_id", row.getInteger("discovery_id"))
+                                                .put("device_ip", row.getString("device_ip"))
+                                                .put("port", row.getInteger("port"))
+                                                .put("protocol", row.getString("protocol"))
+                                                .put("status", row.getString("status"))
+                                                .put("matched_credentials", new JsonArray(row.getString("matched_credentials")))
+                                                .put("retry_count", row.getInteger("retry_count"))
+                                                .put("max_retries", row.getInteger("max_retries"))
+                                        );
+                                    }
+                                    return result;
+                                })
+                )
+                .onSuccess(result -> msg.reply(result))
+                .onFailure(err -> msg.fail(500, err.getMessage()));
+
+    }
+
+    private void handleUpsertDiscoveredDevice(Message<JsonObject> msg) {
+
+        JsonObject device = msg.body();
+
+        String sql = """
+                    INSERT INTO discovered_devices (
+                        discovery_id, device_ip, port, protocol, status, matched_credentials,
+                        retry_count, max_retries,
+                        first_discovered, last_seen,
+                        reachable_count, unreachable_count, total_attempts, last_status_change
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6::jsonb,
+                        $7, $8,
+                        now(), now(),
+                        CASE WHEN $5 = 'REACHABLE' THEN 1 ELSE 0 END,
+                        CASE WHEN $5 = 'UNREACHABLE' THEN 1 ELSE 0 END,
+                        1,
+                        now()
+                    )
+                    ON CONFLICT (discovery_id, device_ip, protocol)
+                    DO UPDATE SET
+                        port = EXCLUDED.port,
+                        protocol = EXCLUDED.protocol,
+                        status = EXCLUDED.status,
+                        matched_credentials = EXCLUDED.matched_credentials,
+                        retry_count = EXCLUDED.retry_count,
+                        max_retries = EXCLUDED.max_retries,
+                        last_seen = now(),
+                        reachable_count = discovered_devices.reachable_count + CASE WHEN EXCLUDED.status = 'REACHABLE' THEN 1 ELSE 0 END,
+                        unreachable_count = discovered_devices.unreachable_count + CASE WHEN EXCLUDED.status = 'UNREACHABLE' THEN 1 ELSE 0 END,
+                        total_attempts = discovered_devices.total_attempts + 1,
+                        last_status_change = CASE WHEN discovered_devices.status != EXCLUDED.status THEN now() ELSE discovered_devices.last_status_change END
+                    RETURNING *
+                """;
+
+        Tuple params = Tuple.of(
+                device.getInteger("discovery_id"),
+                device.getString("device_ip"),
+                device.getInteger("port"),
+                device.getString("protocol"),
+                device.getString("status"),
+                device.getJsonArray("matched_credentials").encode(),
+                device.getInteger("retry_count", 0),
+                device.getInteger("max_retries", 3)
+        );
+
+        pool.preparedQuery(sql)
+                .execute(params)
+                .onSuccess(rowSet -> {
+
+                    if (rowSet.rowCount() > 0) {
+
+                        Row row = rowSet.iterator().next();
+
+                        JsonObject result = new JsonObject()
+                                .put("discovery_id", row.getInteger("discovery_id"))
+                                .put("device_ip", row.getString("device_ip"))
+                                .put("port", row.getInteger("port"))
+                                .put("protocol", row.getString("protocol"))
+                                .put("status", row.getString("status"))
+                                .put("matched_credentials", row.getValue("matched_credentials"))
+                                .put("retry_count", row.getInteger("retry_count"))
+                                .put("max_retries", row.getInteger("max_retries"))
+                                .put("first_discovered", row.getLocalDateTime("first_discovered").toString())
+                                .put("last_seen", row.getLocalDateTime("last_seen").toString())
+                                .put("reachable_count", row.getInteger("reachable_count"))
+                                .put("unreachable_count", row.getInteger("unreachable_count"))
+                                .put("total_attempts", row.getInteger("total_attempts"))
+                                .put("last_status_change", row.getLocalDateTime("last_status_change").toString());
+
+                        msg.reply(result);
+
+                    } else {
+
+                        msg.fail(500, "Failed to upsert device");
+
+                    }
+                })
+                .onFailure(err -> msg.fail(500, err.getMessage()));
+
+    }
+
+    private void handleUpdateDiscoveryQueueStatus(Message<JsonObject> msg) {
+
+        JsonObject body = msg.body();
+
+        var discoveryId = body.getInteger("discoveryId");
+
+        var deviceIp = body.getString("deviceIp");
+
+        var status = body.getString("status");
+
+        var sql = "UPDATE discovery_queue SET status = $1 WHERE discovery_id = $2 AND device_ip = $3";
+
+        pool.preparedQuery(sql)
+                .execute(Tuple.of(status, discoveryId, deviceIp))
+                .onSuccess(rowSet -> msg.reply(true))
+                .onFailure(err -> msg.fail(500, err.getMessage()))
+                .mapEmpty();
+
+    }
+
+    private void handleGetAllReachableDevices(Message<JsonObject> msg) {
+
+        var body = msg.body();
+
+        var discoveryId = body.getInteger("discoveryId");
+
+        if (discoveryId == null) {
+
+            msg.fail(500, "DiscoveryID can not be null.");
+
+            return;
+
+        }
+
+        var sql = "SELECT * FROM discovered_devices WHERE discovery_id = $1 AND status = 'REACHABLE'";
+
+        pool.preparedQuery(sql)
+                .execute(Tuple.of(discoveryId))
+                .onSuccess(rowSet -> {
+
+                    var result = new JsonArray();
+
+                    rowSet.forEach(row -> {
+
+                        result.add(
+                                new JsonObject()
+                                        .put("device_ip", row.getString("device_ip"))
+                                        .put("port", row.getInteger("port"))
+                                        .put("protocol", row.getString("protocol"))
+                                        .put("matched_credentials", row.getJsonArray("matched_credentials"))
+                                        .put("status", row.getString("status"))
+                        );
+
+                    });
+
+                    msg.reply(result);
 
                 })
                 .onFailure(err -> msg.fail(500, err.getMessage()));
