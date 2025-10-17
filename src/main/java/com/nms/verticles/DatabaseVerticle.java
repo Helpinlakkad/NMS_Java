@@ -3,6 +3,7 @@ package com.nms.verticles;
 import com.nms.config.AppConfig;
 import com.nms.config.DatabaseConfig;
 import io.vertx.core.AbstractVerticle;
+import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.eventbus.Message;
 import io.vertx.core.json.JsonArray;
@@ -17,6 +18,9 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 public class DatabaseVerticle extends AbstractVerticle {
 
@@ -86,7 +90,7 @@ public class DatabaseVerticle extends AbstractVerticle {
 
         vertx.eventBus().consumer(AppConfig.EB_UPDATE_DISCOVERY_QUEUE_STATUS, this::handleUpdateDiscoveryQueueStatus);
 
-        vertx.eventBus().consumer(AppConfig.EB_GET_ALL_REACHABLE_DEVICES, this::handleGetAllReachableDevices);
+        vertx.eventBus().consumer(AppConfig.EB_GET_ALL_REACHABLE_DEVICES, this::handleGetAllReachableDevicesByDiscoveryIdBatchWise);
 
     }
 
@@ -572,6 +576,8 @@ public class DatabaseVerticle extends AbstractVerticle {
 
         JsonObject device = msg.body();
 
+        JsonArray credentialProfileNames = device.getJsonArray("matched_credentials");
+
         String sql = """
                     INSERT INTO discovered_devices (
                         discovery_id, device_ip, port, protocol, status, matched_credentials,
@@ -603,50 +609,106 @@ public class DatabaseVerticle extends AbstractVerticle {
                     RETURNING *
                 """;
 
-        Tuple params = Tuple.of(
-                device.getInteger("discovery_id"),
-                device.getString("device_ip"),
-                device.getInteger("port"),
-                device.getString("protocol"),
-                device.getString("status"),
-                device.getJsonArray("matched_credentials").encode(),
-                device.getInteger("retry_count", 0),
-                device.getInteger("max_retries", 3)
-        );
+        fetchCredential(credentialProfileNames)
+                .onSuccess(credentials -> {
+
+                    Tuple params = Tuple.of(
+                            device.getInteger("discovery_id"),
+                            device.getString("device_ip"),
+                            device.getInteger("port"),
+                            device.getString("protocol"),
+                            device.getString("status"),
+                            credentials,
+                            device.getInteger("retry_count", 0),
+                            device.getInteger("max_retries", 3)
+                    );
+
+                    pool.preparedQuery(sql)
+                            .execute(params)
+                            .onSuccess(rowSet -> {
+
+                                if (rowSet.rowCount() > 0) {
+
+                                    Row row = rowSet.iterator().next();
+
+                                    JsonObject result = new JsonObject()
+                                            .put("discovery_id", row.getInteger("discovery_id"))
+                                            .put("device_ip", row.getString("device_ip"))
+                                            .put("port", row.getInteger("port"))
+                                            .put("protocol", row.getString("protocol"))
+                                            .put("status", row.getString("status"))
+                                            .put("matched_credentials", row.getValue("matched_credentials"))
+                                            .put("retry_count", row.getInteger("retry_count"))
+                                            .put("max_retries", row.getInteger("max_retries"))
+                                            .put("first_discovered", row.getLocalDateTime("first_discovered").toString())
+                                            .put("last_seen", row.getLocalDateTime("last_seen").toString())
+                                            .put("reachable_count", row.getInteger("reachable_count"))
+                                            .put("unreachable_count", row.getInteger("unreachable_count"))
+                                            .put("total_attempts", row.getInteger("total_attempts"))
+                                            .put("last_status_change", row.getLocalDateTime("last_status_change").toString());
+
+                                    msg.reply(result);
+
+                                } else {
+
+                                    msg.fail(500, "Failed to upsert device");
+
+                                }
+                            })
+                            .onFailure(err -> msg.fail(500, err.getMessage()));
+
+
+                })
+                .onFailure(err -> {
+
+                    msg.fail(500, err.getMessage());
+
+                });
+
+
+    }
+
+    private Future<JsonArray> fetchCredential(JsonArray credentialProfileNames) {
+
+        Promise<JsonArray> promise = Promise.promise();
+
+        if (credentialProfileNames.isEmpty()) {
+
+            promise.complete(new JsonArray());
+
+            return promise.future();
+        }
+
+        var placeholders = IntStream.range(1, credentialProfileNames.size() + 1)
+                .mapToObj(i -> "$" + i)
+                .collect(Collectors.joining(","));
+
+        var sql = "SELECT username, password, protocol FROM credentials WHERE profile_name IN (" + placeholders + ")";
+
+        Tuple params = Tuple.tuple();
+
+        credentialProfileNames.forEach(name -> params.addString(name.toString()));
 
         pool.preparedQuery(sql)
                 .execute(params)
                 .onSuccess(rowSet -> {
 
-                    if (rowSet.rowCount() > 0) {
+                    JsonArray result = new JsonArray();
 
-                        Row row = rowSet.iterator().next();
+                    rowSet.forEach(row ->
+                            result.add(
+                                    new JsonObject()
+                                            .put("username", row.getString("username"))
+                                            .put("password", row.getString("password"))
+                                            .put("protocol", row.getString("protocol"))
+                            ));
 
-                        JsonObject result = new JsonObject()
-                                .put("discovery_id", row.getInteger("discovery_id"))
-                                .put("device_ip", row.getString("device_ip"))
-                                .put("port", row.getInteger("port"))
-                                .put("protocol", row.getString("protocol"))
-                                .put("status", row.getString("status"))
-                                .put("matched_credentials", row.getValue("matched_credentials"))
-                                .put("retry_count", row.getInteger("retry_count"))
-                                .put("max_retries", row.getInteger("max_retries"))
-                                .put("first_discovered", row.getLocalDateTime("first_discovered").toString())
-                                .put("last_seen", row.getLocalDateTime("last_seen").toString())
-                                .put("reachable_count", row.getInteger("reachable_count"))
-                                .put("unreachable_count", row.getInteger("unreachable_count"))
-                                .put("total_attempts", row.getInteger("total_attempts"))
-                                .put("last_status_change", row.getLocalDateTime("last_status_change").toString());
+                    promise.complete(result);
 
-                        msg.reply(result);
-
-                    } else {
-
-                        msg.fail(500, "Failed to upsert device");
-
-                    }
                 })
-                .onFailure(err -> msg.fail(500, err.getMessage()));
+                .onFailure(promise::fail);
+
+        return promise.future();
 
     }
 
@@ -670,25 +732,72 @@ public class DatabaseVerticle extends AbstractVerticle {
 
     }
 
-    private void handleGetAllReachableDevices(Message<JsonObject> msg) {
+    //Recursive Approach (Memory OverHead + May StackOverFlow)
+    private void handleGetAllReachableDevicesByDiscoveryIdBatchWise(Message<JsonObject> msg) {
 
         var body = msg.body();
 
         var discoveryId = body.getInteger("discoveryId");
 
-        if (discoveryId == null) {
+        var batchSize = body.getInteger("batchSize");
 
-            msg.fail(500, "DiscoveryID can not be null.");
+        if (discoveryId == null || batchSize == null) {
+
+            msg.fail(500, "DiscoveryID or BatchSize can not be null.");
 
             return;
 
         }
 
-        var sql = "SELECT * FROM discovered_devices WHERE discovery_id = $1 AND status = 'REACHABLE'";
+        fetchAllBatchesIterative(discoveryId, batchSize)
+                .onSuccess(msg::reply)
+                .onFailure(err -> msg.fail(500, err.getMessage()));
+
+    }
+
+    private Future<JsonArray> fetchAllBatchesIterative(int discoveryId, int batchSize) {
+
+        Promise<JsonArray> promise = Promise.promise();
+
+        List<JsonArray> allBatches = new ArrayList<>();
+
+        fetchNextBatch(discoveryId, batchSize, 0, allBatches)
+                .onSuccess(response -> {
+                    LOG.info("✅ Recursive chain completed with {} batches", response.size());
+
+                    promise.complete(response.stream().flatMap(JsonArray::stream).collect(JsonArray::new, JsonArray::add, JsonArray::addAll));
+                })
+                .onFailure(err -> {
+
+                    LOG.error("❌ Recursive chain failed: {}", err.getMessage());
+
+                    promise.fail(err);
+
+                });
+
+
+        return promise.future();
+
+    }
+
+    private Future<List<JsonArray>> fetchNextBatch(int discoveryId, int batchSize, int offSet, List<JsonArray> allBatches) {
+
+        var sql = "SELECT * FROM discovered_devices WHERE discovery_id = $1 AND status = 'REACHABLE' LIMIT $2 OFFSET $3";
+
+        Promise<List<JsonArray>> promise = Promise.promise();
 
         pool.preparedQuery(sql)
-                .execute(Tuple.of(discoveryId))
+                .execute(Tuple.of(discoveryId, batchSize, offSet))
                 .onSuccess(rowSet -> {
+
+                    if (rowSet.rowCount() == 0) {
+
+                        // No more rows → complete promise
+                        promise.complete(allBatches);
+
+                        return;
+
+                    }
 
                     var result = new JsonArray();
 
@@ -702,13 +811,117 @@ public class DatabaseVerticle extends AbstractVerticle {
                                         .put("matched_credentials", row.getJsonArray("matched_credentials"))
                                         .put("status", row.getString("status"))
                         );
-
                     });
 
-                    msg.reply(result);
+                    allBatches.add(result);
+
+                    // Fetch next batch
+                    fetchNextBatch(discoveryId, batchSize, offSet + batchSize, allBatches)
+                            .onSuccess(promise::complete)
+                            .onFailure(promise::fail);
 
                 })
-                .onFailure(err -> msg.fail(500, err.getMessage()));
+                .onFailure(err -> promise.fail(err.getMessage()));
+
+        return promise.future();
+
+    }
+
+    //No memory OverHead Direct send each batch to ZMQ using eventBus
+    private void handleGetAllReachableDevicesForPolling(Message<JsonObject> msg) {
+
+        var body = msg.body();
+
+        var discoveryId = body.getString("discoveryId");
+
+        var batchSize = body.getInteger("batchSize");
+
+        if (discoveryId == null || batchSize == null) {
+
+            msg.fail(500, "DiscoveryID or BatchSize can not be null.");
+
+            return;
+
+        }
+
+        fetchAllBatchesStreamed(Integer.parseInt(discoveryId), batchSize)
+                .onSuccess(v -> {
+                    LOG.info("✅ Completed streaming all reachable devices for discoveryId {}", discoveryId);
+                    msg.reply(new JsonObject().put("status", "completed"));
+                })
+                .onFailure(err -> {
+                    LOG.error("Failed to fetch reachable devices: {}", err.getMessage());
+                    msg.fail(500, err.getMessage());
+                });
+
+    }
+
+    private Future<Void> fetchAllBatchesStreamed(int discoveryId, int batchSize) {
+
+        Promise<Void> promise = Promise.promise();
+
+        // Start from offset 0 and fetch iteratively
+        fetchBatch(discoveryId, batchSize, 0)
+                .compose(batch -> handleBatchAndContinue(discoveryId, batchSize, 0, batch, promise));
+
+        return promise.future();
+
+    }
+
+    private Future<JsonArray> fetchBatch(int discoveryId, int batchSize, int offSet) {
+
+        Promise<JsonArray> promise = Promise.promise();
+
+        String sql = """
+                SELECT *
+                FROM discovered_devices
+                WHERE discovery_id = $1 AND status = 'REACHABLE'
+                LIMIT $2 OFFSET $3
+                """;
+
+        pool.preparedQuery(sql)
+                .execute(Tuple.of(discoveryId, batchSize, offSet))
+                .onSuccess(rowSet -> {
+
+                    JsonArray batch = new JsonArray();
+
+                    rowSet.forEach(row ->
+
+                            batch.add(new JsonObject()
+                                    .put("discoveryId", discoveryId)
+                                    .put("device_ip", row.getString("device_ip"))
+                                    .put("port", row.getInteger("port"))
+                                    .put("matched_credentials", row.getJsonArray("matched_credentials"))
+                                    .put("status", row.getString("status"))
+
+                            ));
+
+                    promise.complete(batch);
+                })
+                .onFailure(promise::fail);
+
+        return promise.future();
+
+    }
+
+    private Future<Void> handleBatchAndContinue(int discoveryId, int batchSize, int offSet, JsonArray batch, Promise<Void> donePromise) {
+
+        if (batch.isEmpty()) {
+
+            LOG.info("Empty batch reached - completing stream");
+
+            donePromise.complete();
+
+            return Future.succeededFuture();
+
+        }
+
+        // Stream batch to eventBus immediately (no caching)
+
+        vertx.eventBus().publish(AppConfig.EB_ZMQ_SEND_TO_GO, batch);
+
+        return fetchBatch(discoveryId, batchSize, offSet + batchSize)
+                .compose(nextBatch -> handleBatchAndContinue(discoveryId, batchSize, offSet + batchSize, nextBatch, donePromise));
 
     }
 

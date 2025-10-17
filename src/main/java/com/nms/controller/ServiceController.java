@@ -26,6 +26,12 @@ public class ServiceController {
 
             var discoveryId = routingContext.pathParam("discoveryProfileId");
 
+            if (discoveryId == null) {
+
+                throw new Exception("DiscoveryId is not valid.");
+
+            }
+
             var body = new JsonObject()
                     .put("discoveryProfileId", discoveryId);
 
@@ -65,6 +71,121 @@ public class ServiceController {
         } catch (Exception e) {
 
             LOG.error("Error During Start discovery : {}", e.getMessage());
+
+            routingContext.response()
+                    .setStatusCode(500)
+                    .putHeader("Content-Type", "application/json")
+                    .end(new JsonObject()
+                            .put("status", "failed")
+                            .put("error", e.getMessage())
+                            .toBuffer()
+                    );
+
+        }
+
+    }
+
+    public void startProvisionByDiscoveryId(RoutingContext routingContext) {
+
+        try {
+
+            var discoveryId = routingContext.pathParam("discoveryProfileId");
+
+            if (discoveryId == null) {
+
+                throw new Exception("DiscoveryId is not valid");
+
+            }
+
+            var body = new JsonObject()
+                    .put("discoveryProfileId", discoveryId);
+
+            vertx.eventBus().request(AppConfig.EB_START_PROVISION, body)
+                    .onSuccess(message -> {
+
+                        routingContext.response()
+                                .end(new JsonObject()
+                                        .put("status", "success")
+                                        .put("Message", message.body())
+                                        .toBuffer()
+                                );
+
+                    })
+                    .onFailure(err -> {
+
+                        routingContext.response()
+                                .end(new JsonObject()
+                                        .put("status", "fail")
+                                        .put("Message", err.getMessage())
+                                        .toBuffer()
+                                );
+
+                    });
+
+
+        } catch (Exception e) {
+
+            LOG.error("Error During Start Provisioning : {}", e.getMessage());
+
+            routingContext.response()
+                    .end(new JsonObject()
+                            .put("status", "fail")
+                            .put("Message", e.getMessage())
+                            .toBuffer()
+                    );
+
+        }
+
+    }
+
+    public void stopProvisionByDiscoveryId(RoutingContext routingContext) {
+
+        try {
+
+            var discoveryId = routingContext.pathParam("discoveryProfileId");
+
+            if (discoveryId == null) {
+
+                throw new Exception("DiscoveryId is not valid");
+
+            }
+
+            var body = new JsonObject()
+                    .put("discoveryProfileId", discoveryId);
+
+            vertx.eventBus().request(AppConfig.EB_STOP_PROVISION, body)
+                    .onSuccess(message -> {
+
+                        routingContext.response()
+                                .end(new JsonObject()
+                                        .put("status", "success")
+                                        .put("Message", message.body())
+                                        .toBuffer()
+                                );
+
+                    })
+                    .onFailure(err -> {
+
+                        routingContext.response()
+                                .end(new JsonObject()
+                                        .put("status", "fail")
+                                        .put("Message", err.getMessage())
+                                        .toBuffer()
+                                );
+
+                    });
+
+
+        } catch (Exception e) {
+
+            LOG.error("Error During Stop Provisioning : {}", e.getMessage());
+
+            routingContext.response()
+                    .end(new JsonObject()
+                            .put("status", "fail")
+                            .put("Message", e.getMessage())
+                            .toBuffer()
+                    );
 
         }
 

@@ -1,8 +1,10 @@
 package com.nms;
 
+import com.nms.config.AppConfig;
 import com.nms.repository.CredentialRepository;
 import com.nms.repository.DiscoveryRepository;
 import com.nms.routes.RouteRegistry;
+import com.nms.services.DeviceMonitorService;
 import com.nms.services.DiscoveryService;
 import com.nms.verticles.DatabaseVerticle;
 import io.vertx.core.Vertx;
@@ -15,8 +17,6 @@ import org.slf4j.LoggerFactory;
 public class Main {
 
     private static final Logger LOG = LoggerFactory.getLogger(Main.class);
-
-    private static final int PORT = 8888;
 
     public static void main(String[] args) {
 
@@ -60,6 +60,15 @@ public class Main {
 
                 })
                 .compose(id -> {
+
+                    DeviceMonitorService deviceMonitorServiceVerticle = new DeviceMonitorService(discoveryRepository);
+
+                    return vertx.deployVerticle(deviceMonitorServiceVerticle)
+                            .onSuccess(did -> LOG.info("✅ DeviceMonitorService deployed with id {}", id))
+                            .onFailure(err -> LOG.error("❌ Failed to deploy DeviceMonitorService: {}", err.getMessage()));
+
+                })
+                .compose(id -> {
                     // Now setup routers and start HTTP server AFTER DiscoveryService is deployed
                     // Use the SAME repository instances
                     // --- Setup Routers ---
@@ -93,10 +102,10 @@ public class Main {
 
                     return vertx.createHttpServer()
                             .requestHandler(mainRouter)
-                            .listen(PORT)
+                            .listen(AppConfig.HTTP_PORT)
                             .onSuccess(http -> {
 
-                                LOG.info("🚀 HTTP server started at port {} : http://localhost:{}", PORT, PORT);
+                                LOG.info("🚀 HTTP server started at port {} : http://localhost:{}", AppConfig.HTTP_PORT, AppConfig.HTTP_PORT);
 
                             }).mapEmpty();
 

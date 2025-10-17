@@ -54,6 +54,9 @@ public class RouteRegistry {
 
         restAPI.get("/startDiscovery/:discoveryProfileId").handler(serviceController::startDiscoveryByDiscoveryId);
 
+        restAPI.get("/startProvision/:discoveryProfileId").handler(serviceController::startProvisionByDiscoveryId);
+
+        restAPI.get("/stopProvision/:discoveryProfileId").handler(serviceController::stopProvisionByDiscoveryId);
 
     }
 

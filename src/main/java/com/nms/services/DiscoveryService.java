@@ -111,7 +111,7 @@ public class DiscoveryService extends AbstractVerticle {
                                     processDiscoveryQueue(discoveryId, allCreds, credentialProfileNames))
                             .compose(v ->
                                     //Step 4: Fetch Reachable devices from DB
-                                    discoveryRepository.getAllReachableDevices(discoveryId)
+                                    discoveryRepository.getAllReachableDevicesByDiscoveryIdBatchWise(discoveryId, BATCH_SIZE)
                             );
 
                 })

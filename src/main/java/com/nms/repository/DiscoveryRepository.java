@@ -158,16 +158,17 @@ public class DiscoveryRepository {
         return vertx.eventBus().request(AppConfig.EB_UPDATE_DISCOVERY_QUEUE_STATUS, body).mapEmpty();
     }
 
-    public Future<JsonArray> getAllReachableDevices(int discoveryId) {
+    public Future<JsonArray> getAllReachableDevicesByDiscoveryIdBatchWise(int discoveryId, int batchSize) {
 
-        if (discoveryId <= 0) {
+        if (discoveryId <= 0 || batchSize <= 0) {
 
-            return Future.failedFuture("Invalid discoveryId passed.");
+            return Future.failedFuture("Invalid discoveryId or batchSize passed.");
 
         }
 
         JsonObject body = new JsonObject()
-                .put("discoveryId", discoveryId);
+                .put("discoveryId", discoveryId)
+                .put("batchSize", batchSize);
 
         return vertx.eventBus().<JsonArray>request(AppConfig.EB_GET_ALL_REACHABLE_DEVICES, body)
                 .map(Message::body);

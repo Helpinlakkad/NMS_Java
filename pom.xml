@@ -57,6 +57,11 @@
             <artifactId>vertx-pg-client</artifactId>
             <version>${vertx.version}</version>
         </dependency>
+        <dependency>
+            <groupId>org.zeromq</groupId>
+            <artifactId>jeromq</artifactId>
+            <version>0.5.3</version>
+        </dependency>
     </dependencies>
 
 </project>
