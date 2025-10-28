@@ -9,7 +9,7 @@ import com.nms.services.DeviceMonitorService;
 import com.nms.services.DiscoveryService;
 import com.nms.services.GlobalPollingService;
 import com.nms.services.ZMQCommunication;
-import com.nms.verticles.DatabaseVerticle;
+import com.nms.database.DatabaseVerticle;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
@@ -90,7 +90,7 @@ public class Main {
 
                 )
                 .compose(id -> {
-                    // Now setup routers and start HTTP server AFTER DiscoveryService is deployed
+                    // Now setup routers and start HTTP server AFTER Service is deployed
                     // Use the SAME repository instances
                     // --- Setup Routers ---
 

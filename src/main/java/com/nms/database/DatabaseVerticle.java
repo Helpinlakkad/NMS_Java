@@ -1,4 +1,4 @@
-package com.nms.verticles;
+package com.nms.database;
 
 import com.nms.config.AppConfig;
 import com.nms.config.DatabaseConfig;
@@ -18,7 +18,6 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 

@@ -98,9 +98,9 @@ public class DeviceMonitorService extends AbstractVerticle {
 
             }
 
-            stopPolling(discoveryId);
-
-            message.reply("Stopped provision and polling for discoveryId " + discoveryId);
+            stopPolling(discoveryId)
+                    .onSuccess(v -> message.reply("Stopped provision and polling for discoveryId " + discoveryId))
+                    .onFailure(err -> message.fail(500, err.getMessage()));
 
         });
 
@@ -119,6 +119,14 @@ public class DeviceMonitorService extends AbstractVerticle {
                 discoveryRepository.getAllReachableDevicesByDiscoveryIdBatchWise(discoveryId, BATCH_SIZE)
                         .onSuccess(batches -> {
 
+                            if (batches.isEmpty()) {
+
+                                LOG.info("Not any devices available for discoveryId : {}", discoveryId);
+
+                                return;
+
+                            }
+
                             cachedDeviceBatches.put(discoveryId, batches); // ✅ cache for reuse
 
                             // Start polling timer for discovery
@@ -133,7 +141,9 @@ public class DeviceMonitorService extends AbstractVerticle {
 
             }
 
-            sendCachedBatches(discoveryId);
+            sendCachedBatches(discoveryId)
+                    .onSuccess(v -> LOG.info("Batched Send to ZMQ."))
+                    .onFailure(err -> LOG.error("Error in Send Batches : {}", err.getMessage()));
         });
 
         startPromise.complete();
@@ -157,12 +167,20 @@ public class DeviceMonitorService extends AbstractVerticle {
         discoveryRepository.getAllReachableDevicesByDiscoveryIdBatchWise(discoveryId, BATCH_SIZE)
                 .onSuccess(batches -> {
 
+                    if (batches.isEmpty()) {
+
+                        promise.complete("Not any devices available for discoveryId " + discoveryId);
+
+                        return;
+
+                    }
+
                     cachedDeviceBatches.put(discoveryId, batches); // ✅ cache for reuse
 
                     // Start polling timer for discovery
-                    startPolling(discoveryId);
-
-                    promise.complete("Provision + Polling running for discoveryId " + discoveryId);
+                    startPolling(discoveryId)
+                            .onSuccess(v -> promise.complete("Provision + Polling running for discoveryId " + discoveryId))
+                            .onFailure(err -> promise.fail(err.getMessage()));
 
                 })
                 .onFailure(err -> {
@@ -175,7 +193,9 @@ public class DeviceMonitorService extends AbstractVerticle {
 
     }
 
-    private void startPolling(int discoveryId) {
+    private Future<Void> startPolling(int discoveryId) {
+
+        Promise<Void> promise = Promise.promise();
 
         //add discovery ID in active polling DB
 
@@ -184,21 +204,31 @@ public class DeviceMonitorService extends AbstractVerticle {
 
                     LOG.info(res);
 
-                    sendCachedBatches(discoveryId);
+                    sendCachedBatches(discoveryId)
+                            .onSuccess(v -> LOG.info("✅ Provisioning done, polling started for DiscoveryId : {}", discoveryId))
+                            .onFailure(err -> LOG.error("Error in Send Batch : {}", err.getMessage()));
 
-                    LOG.info("✅ Provisioning done, polling started for DiscoveryId : {}", discoveryId);
+                    promise.complete();
 
                 })
-                .onFailure(err -> LOG.error(err.getMessage()));
+                .onFailure(err -> {
+
+                    LOG.error(err.getMessage());
+
+                    promise.fail(err.getMessage());
+
+                });
+
+        return promise.future();
 
     }
 
-    private void sendCachedBatches(int discoveryId) {
+    private Future<Void> sendCachedBatches(int discoveryId) {
 
         var batches = cachedDeviceBatches.get(discoveryId);
 
         if (batches == null)
-            return;
+            return Future.failedFuture("No Batch Available.");
 
         batches.forEach(batch -> {
 
@@ -210,9 +240,13 @@ public class DeviceMonitorService extends AbstractVerticle {
 
         });
 
+        return Future.succeededFuture();
+
     }
 
-    private void stopPolling(int discoveryId) {
+    private Future<Void> stopPolling(int discoveryId) {
+
+        Promise<Void> promise = Promise.promise();
 
         //Remove discovery ID from active Polling DB (as Update status from ACTIVE to STOPPED)
 
@@ -224,8 +258,19 @@ public class DeviceMonitorService extends AbstractVerticle {
                     //Remove discovery ID from cached
                     cachedDeviceBatches.remove(discoveryId); // ✅ clear cache to free memory
 
+                    promise.complete();
+
                 })
-                .onFailure(err -> LOG.error(err.getMessage()));
+                .onFailure(err -> {
+
+                    LOG.error(err.getMessage());
+
+                    promise.fail(err.getMessage());
+
+                });
+
+        return promise.future();
+
     }
 
 }
