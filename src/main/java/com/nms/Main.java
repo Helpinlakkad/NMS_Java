@@ -3,9 +3,12 @@ package com.nms;
 import com.nms.config.AppConfig;
 import com.nms.repository.CredentialRepository;
 import com.nms.repository.DiscoveryRepository;
+import com.nms.repository.ServiceRepository;
 import com.nms.routes.RouteRegistry;
 import com.nms.services.DeviceMonitorService;
 import com.nms.services.DiscoveryService;
+import com.nms.services.GlobalPollingService;
+import com.nms.services.ZMQCommunication;
 import com.nms.verticles.DatabaseVerticle;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonObject;
@@ -39,6 +42,8 @@ public class Main {
 
         DiscoveryRepository discoveryRepository = new DiscoveryRepository(vertx);
 
+        ServiceRepository serviceRepository = new ServiceRepository(vertx);
+
         vertx.deployVerticle(databaseVerticle)
                 .compose(id -> {
 
@@ -61,13 +66,29 @@ public class Main {
                 })
                 .compose(id -> {
 
-                    DeviceMonitorService deviceMonitorServiceVerticle = new DeviceMonitorService(discoveryRepository);
+                    DeviceMonitorService deviceMonitorServiceVerticle = new DeviceMonitorService(discoveryRepository, serviceRepository);
 
                     return vertx.deployVerticle(deviceMonitorServiceVerticle)
                             .onSuccess(did -> LOG.info("✅ DeviceMonitorService deployed with id {}", id))
                             .onFailure(err -> LOG.error("❌ Failed to deploy DeviceMonitorService: {}", err.getMessage()));
 
                 })
+                .compose(id -> {
+
+                    GlobalPollingService globalPollingService = new GlobalPollingService(serviceRepository);
+
+                    return vertx.deployVerticle(globalPollingService)
+                            .onSuccess(did -> LOG.info("✅ GlobalPollingService deployed with id {}", id))
+                            .onFailure(err -> LOG.error("❌ Failed to deploy GlobalPollingService: {}", err.getMessage()));
+
+                })
+                .compose(id ->
+
+                        vertx.deployVerticle(ZMQCommunication.class.getName())
+                                .onSuccess(did -> LOG.info("✅ ZMQCommunication deployed with id {}", id))
+                                .onFailure(err -> LOG.error("❌ Failed to deploy ZMQCommunication: {}", err.getMessage()))
+
+                )
                 .compose(id -> {
                     // Now setup routers and start HTTP server AFTER DiscoveryService is deployed
                     // Use the SAME repository instances
@@ -97,7 +118,7 @@ public class Main {
 
                     // --- Attach routes ---
 
-                    new RouteRegistry(vertx, credentialRepository, discoveryRepository)
+                    new RouteRegistry(vertx, credentialRepository, discoveryRepository, serviceRepository)
                             .attachAllRoutes(restAPI);
 
                     return vertx.createHttpServer()

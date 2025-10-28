@@ -4,126 +4,271 @@ import com.nms.config.AppConfig;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Promise;
 import io.vertx.core.eventbus.Message;
+import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.zeromq.SocketType;
-import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
+import org.zeromq.ZContext;
 
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
 
+/**
+ * Enterprise-grade ZMQ Communication Verticle.
+ * Handles request–reply pattern between Vert.x and Go plugin services.
+ * Tracks request timeouts, retries, and correlation using requestId.
+ */
 public class ZMQCommunication extends AbstractVerticle {
 
     private static final Logger LOG = LoggerFactory.getLogger(ZMQCommunication.class);
 
-    private static ZContext context;
+    private ZContext context;
 
-    private static ZMQ.Socket pushSocket;
+    private ZMQ.Socket pushSocket;
 
-    private static ZMQ.Socket subSocket;
+    private ZMQ.Socket subSocket;
 
-    private final AtomicBoolean isRunning = new AtomicBoolean(true);
+    // Request tracking
+    private final Map<String, PendingRequest> pendingRequests = new HashMap<>();
+
+    private static final String REQUEST_ID = "requestId";
+
+    // Intervals and timeouts
+    private static final int RESPONSE_CHECK_INTERVAL_MS = 500;
+
+    private static final long REQUEST_TIMEOUT_MS = 120_000; // 2 minutes
+
+    private static final long REQUEST_TIMEOUT_CHECK_INTERVAL = 10_000; // 10 seconds
+
+    private record PendingRequest(Message<JsonObject> message, long timestamp) {
+    }
 
     @Override
     public void start(Promise<Void> startPromise) {
 
         try {
-
             context = new ZContext();
 
             pushSocket = context.createSocket(SocketType.PUSH);
 
             subSocket = context.createSocket(SocketType.SUB);
 
-            //connect to Go servers
-
             pushSocket.connect(AppConfig.ZMQ_PUSH_ADDRESS);
 
             subSocket.connect(AppConfig.ZMQ_RESULT_SUB_RESULT);
 
+            subSocket.subscribe(AppConfig.ZMQ_TOPIC_RESULTS.getBytes());
 
-            // Listen on event bus for messages to send to Go
-            vertx.eventBus().consumer(AppConfig.EB_ZMQ_SEND_TO_GO, this::handleSendToGo);
+            // Listen for outgoing requests from internal services
+            vertx.eventBus().localConsumer(AppConfig.EB_ZMQ_SEND_TO_GO, this::handleSendToGo);
 
-            startResultListener();
+            // Periodically poll ZMQ socket for responses
+            vertx.setPeriodic(RESPONSE_CHECK_INTERVAL_MS, id -> checkResponses());
 
-            LOG.info("✅ ZMQCommunicationVerticle initialized");
+            // Clean up timed-out requests periodically
+            vertx.setPeriodic(REQUEST_TIMEOUT_CHECK_INTERVAL, id -> checkTimeouts());
+
+            LOG.info("✅ ZMQCommunication Verticle started and connected to Go plugin.");
 
             startPromise.complete();
 
         } catch (Exception e) {
 
-            LOG.error("❌ Failed to start ZMQCommunicationVerticle: {}", e.getMessage());
+            LOG.error("❌ Failed to start ZMQCommunication Verticle: {}", e.getMessage(), e);
 
-            startPromise.fail(e.getMessage());
+            startPromise.fail(e);
 
         }
 
     }
 
-    private void startResultListener() {
+    /**
+     * Handles message from internal services (polling/discovery)
+     * and sends each device individually to the Go plugin.
+     */
 
-        // Continuously listen for incoming messages from Go
-        vertx.executeBlocking(() -> {
+    private void handleSendToGo(Message<JsonObject> message) {
 
-            while (isRunning.get()) {
+        try {
 
-                try {
+            JsonObject payload = message.body();
 
-                    String msg = subSocket.recvStr(ZMQ.DONTWAIT);
+            LOG.debug("📨 Received payload on EB_ZMQ_SEND_TO_GO: {}", payload.encodePrettily());
 
-                    if (msg != null && msg.startsWith(AppConfig.ZMQ_TOPIC_RESULTS)) {
+            JsonArray devicesArray = new JsonArray();
 
-                        vertx.eventBus().publish(AppConfig.EB_ZMQ_RECEIVE_FROM_GO, msg);
+            // Case A: payload.devices is an array
+            Object devicesVal = payload.getValue("devices");
 
-                    }
+            if (devicesVal instanceof JsonArray) {
 
-                } catch (Exception e) {
+                devicesArray = payload.getJsonArray("devices");
 
-                    LOG.error("ZMQ Listener Error : {}", e.getMessage());
+            } else if (devicesVal instanceof JsonObject) {
+
+                // Case B: payload.devices is a single object -> extract that inner object
+                devicesArray.add(payload.getJsonObject("devices"));
+
+            } else {
+
+                message.fail(400, "Missing devices array/object in message");
+
+                return;
+
+            }
+
+            int discoveryId = payload.getInteger("discoveryId", -1);
+
+            if (devicesArray.isEmpty()) {
+
+                message.fail(400, "No devices found to send");
+
+                return;
+
+            }
+
+            LOG.info("📦 Sending {} devices individually to Go for discoveryId={}", devicesArray.size(), discoveryId);
+
+            for (int i = 0; i < devicesArray.size(); i++) {
+
+                JsonObject device = devicesArray.getJsonObject(i);
+
+                String requestId = UUID.randomUUID().toString();
+
+                device.put(REQUEST_ID, requestId);
+
+                device.put("discoveryId", discoveryId);
+
+                device.put("timestamp", System.currentTimeMillis());
+
+                // Track each device request
+                pendingRequests.put(requestId,
+                        new PendingRequest(message, System.currentTimeMillis()));
+
+                // Send each device to Go
+                boolean sent = pushSocket.send(device.encode(), ZMQ.DONTWAIT);
+
+                if (!sent) {
+
+                    LOG.warn("⚠️ Failed to send device {} to Go (queue full).", device.getString("device_ip"));
+
+                    pendingRequests.remove(requestId);
+
+                } else {
+
+                    LOG.debug("📤 Sent device {} → Go (requestId={})", device.getString("device_ip"), requestId);
 
                 }
 
             }
 
-            return null;
-
-        });
-
-    }
-
-    private void handleSendToGo(Message<JsonObject> msg) {
-
-        var body = msg.body().encode();
-
-        try {
-
-            pushSocket.send(body, ZMQ.DONTWAIT);
-
         } catch (Exception e) {
 
-            LOG.error("Error Sending Message to Go : {}", e.getMessage());
+            LOG.error("Error sending per-device messages to Go: {}", e.getMessage(), e);
+
+            message.fail(500, "Internal ZMQ send error");
 
         }
 
     }
 
+    // Polls for new messages (responses) from Go via SUB socket.
+
+    private void checkResponses() {
+
+        try {
+
+            String msg;
+
+            while ((msg = subSocket.recvStr(ZMQ.DONTWAIT)) != null) {
+
+                if (!msg.startsWith(AppConfig.ZMQ_TOPIC_RESULTS)) {
+
+                    continue;
+
+                }
+
+                // Parse and process message
+                String jsonStr = msg.substring(AppConfig.ZMQ_TOPIC_RESULTS.length()).trim();
+
+                JsonObject response = new JsonObject(jsonStr);
+
+                String requestId = response.getString(REQUEST_ID);
+
+                if (requestId != null && pendingRequests.containsKey(requestId)) {
+
+                    PendingRequest pending = pendingRequests.remove(requestId);
+
+                    response.remove(REQUEST_ID);
+
+                    LOG.info("Response from Go : {}",response.encodePrettily());
+
+                    LOG.debug("📥 Received response from Go for requestId={}", requestId);
+
+                    vertx.eventBus().send(AppConfig.EB_ADD_POLLING_RESULT_TO_DB,response);
+
+                    pending.message.reply(response);
+
+                } else {
+                    // If it's a general broadcast or unmatched response
+
+                    LOG.debug("📡 Untracked Go message received, publishing to event bus.");
+
+//                    vertx.eventBus().publish(AppConfig.EB_ZMQ_RECEIVE_FROM_GO, response);
+
+                }
+
+            }
+
+        } catch (Exception e) {
+
+            LOG.error("ZMQ Response Listener Error: {}", e.getMessage(), e);
+
+        }
+
+    }
+
+    // Periodically checks for timed-out requests and replies with error.
+
+    private void checkTimeouts() {
+
+        long now = System.currentTimeMillis();
+
+        pendingRequests.entrySet().removeIf(entry -> {
+
+            if (now - entry.getValue().timestamp() >= REQUEST_TIMEOUT_MS) {
+
+                LOG.warn("⏳ Request {} timed out", entry.getKey());
+
+                entry.getValue().message().fail(408, "Request timed out");
+
+                return true;
+
+            }
+
+            return false;
+
+        });
+
+    }
+
     @Override
-    public void stop() {
+    public void stop(Promise<Void> stopPromise) {
 
-        isRunning.set(true);
+        if (pushSocket != null) pushSocket.close();
 
-        if (pushSocket != null)
-            pushSocket.close();
+        if (subSocket != null) subSocket.close();
 
-        if (subSocket != null)
-            subSocket.close();
+        if (context != null) context.close();
 
-        if (context != null)
-            context.close();
+        pendingRequests.clear();
 
-        LOG.info("ZMQCommunicationVerticle stopped");
+        LOG.info("🛑 ZMQCommunication Verticle stopped and cleaned up.");
+
+        stopPromise.complete();
 
     }
 

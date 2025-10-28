@@ -5,6 +5,7 @@ import com.nms.controller.DiscoveryController;
 import com.nms.controller.ServiceController;
 import com.nms.repository.CredentialRepository;
 import com.nms.repository.DiscoveryRepository;
+import com.nms.repository.ServiceRepository;
 import io.vertx.core.Vertx;
 import io.vertx.ext.web.Router;
 
@@ -16,13 +17,13 @@ public class RouteRegistry {
 
     private final ServiceController serviceController;
 
-    public RouteRegistry(Vertx vertx, CredentialRepository credentialRepository, DiscoveryRepository discoveryRepository) {
+    public RouteRegistry(Vertx vertx, CredentialRepository credentialRepository, DiscoveryRepository discoveryRepository, ServiceRepository serviceRepository) {
 
         this.credentialController = new CredentialController(credentialRepository);
 
         this.discoveryController = new DiscoveryController(discoveryRepository);
 
-        this.serviceController = new ServiceController(vertx);
+        this.serviceController = new ServiceController(vertx,serviceRepository);
 
     }
 
@@ -57,6 +58,8 @@ public class RouteRegistry {
         restAPI.get("/startProvision/:discoveryProfileId").handler(serviceController::startProvisionByDiscoveryId);
 
         restAPI.get("/stopProvision/:discoveryProfileId").handler(serviceController::stopProvisionByDiscoveryId);
+
+        restAPI.get("/getPollingResult/:discoveryProfileId").handler(serviceController::getPollingResultsByDiscoveryId);
 
     }
 

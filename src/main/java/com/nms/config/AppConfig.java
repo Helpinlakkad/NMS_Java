@@ -38,13 +38,13 @@ public class AppConfig {
 
     public static final String EB_FETCH_PENDING_BATCH = "fetch.pending.batch.devices";
 
-    public static final String EB_UPSERT_DISCOVERED_DEVICE = "insert.update.discovered.devices";
+    public static final String EB_UPSERT_DISCOVERED_DEVICE = "db.insert.update.discovered.devices";
 
-    public static final String EB_UPDATE_DISCOVERY_QUEUE_STATUS = "update.discovery.queue.status";
+    public static final String EB_UPDATE_DISCOVERY_QUEUE_STATUS = "db.update.discovery.queue.status";
 
-    public static final String EB_GET_ALL_REACHABLE_DEVICES = "get.all.reachable.devices";
+    public static final String EB_GET_ALL_REACHABLE_DEVICES = "db.get.all.reachable.devices";
 
-//    public static final String EB_GET_ALL_REACHABLE_DEVICES_POLLING = "get.all.reachable.devices.polling";
+    public static final String EB_GET_ALL_ACTIVE_DEVICES_POLLING = "db.get.all.active.devices.polling";
 
     public static final String EB_ZMQ_SEND_TO_GO = "zmq.send.to.go";
 
@@ -53,5 +53,15 @@ public class AppConfig {
     public static final String EB_START_PROVISION = "start.provision";
 
     public static final String EB_STOP_PROVISION = "stop.provision";
+
+    public static final String EB_TRIGGER_CACHED_POLLING = "trigger.cached.polling";
+
+    public static final String EB_ADD_NEW_DEVICE_FOR_POLLING = "db.add.new.device.for.polling";
+
+    public static final String EB_UPDATE_POLLING_DEVICE_STATUS = "db.updated.polling.device.status";
+
+    public static final String EB_ADD_POLLING_RESULT_TO_DB = "db.add.polling.result";
+
+    public static final String EB_GET_POLLING_RESULT = "get.polling.result";
 
 }

@@ -2,6 +2,7 @@ package com.nms.services;
 
 import com.nms.config.AppConfig;
 import com.nms.repository.DiscoveryRepository;
+import com.nms.repository.ServiceRepository;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
@@ -19,17 +20,21 @@ public class DeviceMonitorService extends AbstractVerticle {
 
     private final DiscoveryRepository discoveryRepository;
 
+    private final ServiceRepository serviceRepository;
+
     private static final int BATCH_SIZE = 500;
 
-    private static final long POLLING_INTERVAL = 60_000;
+//    private static final long POLLING_INTERVAL = 60_000;
 
-    private final Map<Integer, Long> activePollingTimers = new ConcurrentHashMap<>();
+//    private final Map<Integer, Long> activePollingTimers = new ConcurrentHashMap<>();
 
     private final Map<Integer, JsonArray> cachedDeviceBatches = new ConcurrentHashMap<>();
 
-    public DeviceMonitorService(DiscoveryRepository discoveryRepository) {
+    public DeviceMonitorService(DiscoveryRepository discoveryRepository, ServiceRepository serviceRepository) {
 
         this.discoveryRepository = discoveryRepository;
+
+        this.serviceRepository = serviceRepository;
 
     }
 
@@ -44,11 +49,25 @@ public class DeviceMonitorService extends AbstractVerticle {
 
             JsonObject body = message.body();
 
-            var discoveryId = body.getString("discoveryProfileId");
+            var discoveryIdStr = body.getString("discoveryProfileId");
 
-            LOG.info("Received Provision start event for DiscoveryID : {}", discoveryId);
+            LOG.info("Received Provision start event for DiscoveryID : {}", discoveryIdStr);
 
-            startProvisionAndPolling(Integer.parseInt(discoveryId))
+            int discoveryId;
+
+            try {
+
+                discoveryId = Integer.parseInt(discoveryIdStr);
+
+            } catch (NumberFormatException e) {
+
+                message.fail(400, "Invalid DiscoveryId");
+
+                return;
+
+            }
+
+            startProvisionAndPolling(discoveryId)
                     .onSuccess(message::reply)
                     .onFailure(err -> {
 
@@ -63,12 +82,58 @@ public class DeviceMonitorService extends AbstractVerticle {
 
             JsonObject body = message.body();
 
-            var discoveryId = body.getString("discoveryProfileId");
+            var discoveryIdStr = body.getString("discoveryProfileId");
 
-            stopPolling(Integer.parseInt(discoveryId));
+            int discoveryId;
+
+            try {
+
+                discoveryId = Integer.parseInt(discoveryIdStr);
+
+            } catch (NumberFormatException e) {
+
+                message.fail(400, "Invalid DiscoveryId");
+
+                return;
+
+            }
+
+            stopPolling(discoveryId);
 
             message.reply("Stopped provision and polling for discoveryId " + discoveryId);
 
+        });
+
+        // Trigger cached polling (from GlobalPollingVerticle)
+        vertx.eventBus().<JsonObject>consumer(AppConfig.EB_TRIGGER_CACHED_POLLING, message -> {
+
+            int discoveryId = message.body().getInteger("discoveryProfileId", -1);
+
+            if (discoveryId <= 0)
+                return;
+
+            if (!cachedDeviceBatches.containsKey(discoveryId)) {
+
+                LOG.warn("No cached devices for discoveryId {}, Added cached.", discoveryId);
+
+                discoveryRepository.getAllReachableDevicesByDiscoveryIdBatchWise(discoveryId, BATCH_SIZE)
+                        .onSuccess(batches -> {
+
+                            cachedDeviceBatches.put(discoveryId, batches); // ✅ cache for reuse
+
+                            // Start polling timer for discovery
+                            startPolling(discoveryId);
+
+                        })
+                        .onFailure(err -> {
+
+                            LOG.error("Error in Get Reachable Devices : {}", err.getMessage());
+
+                        });
+
+            }
+
+            sendCachedBatches(discoveryId);
         });
 
         startPromise.complete();
@@ -78,6 +143,16 @@ public class DeviceMonitorService extends AbstractVerticle {
     private Future<String> startProvisionAndPolling(int discoveryId) {
 
         Promise<String> promise = Promise.promise();
+
+        if (cachedDeviceBatches.containsKey(discoveryId)) {
+
+            LOG.warn("✅ Polling already active for discoveryId {}", discoveryId);
+
+            promise.complete("Polling already active");
+
+            return promise.future();
+
+        }
 
         discoveryRepository.getAllReachableDevicesByDiscoveryIdBatchWise(discoveryId, BATCH_SIZE)
                 .onSuccess(batches -> {
@@ -102,25 +177,28 @@ public class DeviceMonitorService extends AbstractVerticle {
 
     private void startPolling(int discoveryId) {
 
-        if (activePollingTimers.containsKey(discoveryId)) {
+        //add discovery ID in active polling DB
 
-            LOG.warn("✅ Polling already active for discoveryId {}", discoveryId);
+        serviceRepository.addNewDeviceForPolling(discoveryId)
+                .onSuccess(res -> {
 
-            return;
+                    LOG.info(res);
 
-        }
+                    sendCachedBatches(discoveryId);
 
-        LOG.info("✅ Provisioning done, polling started for DiscoveryId : {}", discoveryId);
+                    LOG.info("✅ Provisioning done, polling started for DiscoveryId : {}", discoveryId);
 
-        long timerId = vertx.setPeriodic(POLLING_INTERVAL, id -> sendCachedBatches(discoveryId));
-
-        activePollingTimers.put(discoveryId, timerId);
+                })
+                .onFailure(err -> LOG.error(err.getMessage()));
 
     }
 
     private void sendCachedBatches(int discoveryId) {
 
         var batches = cachedDeviceBatches.get(discoveryId);
+
+        if (batches == null)
+            return;
 
         batches.forEach(batch -> {
 
@@ -136,18 +214,18 @@ public class DeviceMonitorService extends AbstractVerticle {
 
     private void stopPolling(int discoveryId) {
 
-        Long timerId = activePollingTimers.remove(discoveryId);
+        //Remove discovery ID from active Polling DB (as Update status from ACTIVE to STOPPED)
 
-        if (timerId != null) {
+        serviceRepository.updatePollingDeviceStatus(discoveryId, "STOPPED")
+                .onSuccess(res -> {
 
-            LOG.info("Stopped provision and polling for DiscoveryId : {} ", discoveryId);
+                    LOG.info(res);
 
-            vertx.cancelTimer(timerId);
+                    //Remove discovery ID from cached
+                    cachedDeviceBatches.remove(discoveryId); // ✅ clear cache to free memory
 
-        }
-
-        cachedDeviceBatches.remove(discoveryId); // ✅ clear cache to free memory
-
+                })
+                .onFailure(err -> LOG.error(err.getMessage()));
     }
 
 }

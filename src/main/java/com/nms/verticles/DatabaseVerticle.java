@@ -92,6 +92,16 @@ public class DatabaseVerticle extends AbstractVerticle {
 
         vertx.eventBus().consumer(AppConfig.EB_GET_ALL_REACHABLE_DEVICES, this::handleGetAllReachableDevicesByDiscoveryIdBatchWise);
 
+        vertx.eventBus().consumer(AppConfig.EB_GET_ALL_ACTIVE_DEVICES_POLLING, this::handleGetAllActiveDevicesForPolling);
+
+        vertx.eventBus().consumer(AppConfig.EB_ADD_NEW_DEVICE_FOR_POLLING, this::handleAddNewDeviceForPolling);
+
+        vertx.eventBus().consumer(AppConfig.EB_UPDATE_POLLING_DEVICE_STATUS, this::handleUpdatePollingDeviceStatus);
+
+        vertx.eventBus().consumer(AppConfig.EB_ADD_POLLING_RESULT_TO_DB, this::handleAddPollingResultToDb);
+
+        vertx.eventBus().consumer(AppConfig.EB_GET_POLLING_RESULT, this::getPollingResults);
+
     }
 
     //Credential Handlers
@@ -550,8 +560,11 @@ public class DatabaseVerticle extends AbstractVerticle {
                         tx.preparedQuery(sql)
                                 .execute(Tuple.of(discoveryId, batchSize))
                                 .map(rowSet -> {
+
                                     JsonArray result = new JsonArray();
+
                                     for (Row row : rowSet) {
+
                                         result.add(new JsonObject()
                                                 .put("id", row.getLong("id"))
                                                 .put("discovery_id", row.getInteger("discovery_id"))
@@ -732,7 +745,6 @@ public class DatabaseVerticle extends AbstractVerticle {
 
     }
 
-    //Recursive Approach (Memory OverHead + May StackOverFlow)
     private void handleGetAllReachableDevicesByDiscoveryIdBatchWise(Message<JsonObject> msg) {
 
         var body = msg.body();
@@ -827,102 +839,277 @@ public class DatabaseVerticle extends AbstractVerticle {
 
     }
 
-    //No memory OverHead Direct send each batch to ZMQ using eventBus
-    private void handleGetAllReachableDevicesForPolling(Message<JsonObject> msg) {
+    private void handleGetAllActiveDevicesForPolling(Message<JsonObject> msg) {
 
-        var body = msg.body();
+        String sql = "SELECT discovery_id FROM active_discoveries_polling WHERE polling_status = 'ACTIVE'";
 
-        var discoveryId = body.getString("discoveryId");
+        pool.preparedQuery(sql)
+                .execute()
+                .onSuccess(rows -> {
 
-        var batchSize = body.getInteger("batchSize");
+                    JsonArray result = new JsonArray();
 
-        if (discoveryId == null || batchSize == null) {
+                    rows.forEach(row -> {
 
-            msg.fail(500, "DiscoveryID or BatchSize can not be null.");
+                        result.add(row.getValue("discovery_id"));
+
+                    });
+
+                    msg.reply(result);
+
+                }).onFailure(err -> {
+
+                    msg.fail(500, "Failed to fetch active devices for polling : " + err.getMessage());
+
+                });
+
+
+    }
+
+    private void handleAddNewDeviceForPolling(Message<JsonObject> msg) {
+
+        JsonObject body = msg.body();
+
+        var discoveryId = body.getInteger("discoveryId");
+
+        if (discoveryId == null) {
+
+            msg.fail(400, "Missing field: discoveryId");
 
             return;
 
         }
 
-        fetchAllBatchesStreamed(Integer.parseInt(discoveryId), batchSize)
-                .onSuccess(v -> {
-                    LOG.info("✅ Completed streaming all reachable devices for discoveryId {}", discoveryId);
-                    msg.reply(new JsonObject().put("status", "completed"));
+        String sql = """
+                INSERT INTO active_discoveries_polling (discovery_id, polling_started_at, polling_status)
+                VALUES ($1, now(), 'ACTIVE')
+                ON CONFLICT (discovery_id)
+                DO UPDATE SET polling_started_at = now(), polling_status = 'ACTIVE'
+                """;
+
+        pool.preparedQuery(sql)
+                .execute(Tuple.of(discoveryId))
+                .onSuccess(rows -> {
+
+                    msg.reply("Device added successfully for polling");
+
                 })
                 .onFailure(err -> {
-                    LOG.error("Failed to fetch reachable devices: {}", err.getMessage());
-                    msg.fail(500, err.getMessage());
+
+                    msg.fail(500, "Failed to add device for polling: " + err.getMessage());
+
+                });
+    }
+
+    private void handleUpdatePollingDeviceStatus(Message<JsonObject> msg) {
+
+        JsonObject body = msg.body();
+
+        var discoveryId = body.getInteger("discoveryId");
+
+        var updatedStatus = body.getString("updatedStatus");
+
+        if (discoveryId == null || updatedStatus == null) {
+
+            msg.fail(400, "Missing field: discoveryId or updatedStatus");
+
+            return;
+
+        }
+
+        var status = updatedStatus.toUpperCase();
+
+        if (!status.equals("ACTIVE") && !status.equals("PAUSED") && !status.equals("STOPPED")) {
+
+            msg.fail(400, "Invalid status: must be ACTIVE, PAUSED, or STOPPED");
+
+            return;
+
+        }
+
+        String sql = "UPDATE active_discoveries_polling SET polling_status = $1 WHERE discovery_id = $2";
+
+        pool.preparedQuery(sql)
+                .execute(Tuple.of(status, discoveryId))
+                .onSuccess(rows -> {
+
+                    if (rows.rowCount() > 0) {
+
+                        msg.reply("Polling status updated successfully to " + status);
+
+                    } else {
+
+                        msg.reply("No device found with discoveryId " + discoveryId);
+
+                    }
+                })
+                .onFailure(err -> {
+
+                    msg.fail(500, "Failed to update polling status: " + err.getMessage());
+
                 });
 
     }
 
-    private Future<Void> fetchAllBatchesStreamed(int discoveryId, int batchSize) {
+    private void handleAddPollingResultToDb(Message<JsonObject> msg) {
 
-        Promise<Void> promise = Promise.promise();
-
-        // Start from offset 0 and fetch iteratively
-        fetchBatch(discoveryId, batchSize, 0)
-                .compose(batch -> handleBatchAndContinue(discoveryId, batchSize, 0, batch, promise));
-
-        return promise.future();
-
-    }
-
-    private Future<JsonArray> fetchBatch(int discoveryId, int batchSize, int offSet) {
-
-        Promise<JsonArray> promise = Promise.promise();
+        JsonObject body = msg.body();
 
         String sql = """
-                SELECT *
-                FROM discovered_devices
-                WHERE discovery_id = $1 AND status = 'REACHABLE'
-                LIMIT $2 OFFSET $3
+                    INSERT INTO polling_results (discovery_id, device_ip, protocol, result, polled_at)
+                    VALUES ($1, $2, $3, $4::jsonb, now());
                 """;
 
         pool.preparedQuery(sql)
-                .execute(Tuple.of(discoveryId, batchSize, offSet))
-                .onSuccess(rowSet -> {
-
-                    JsonArray batch = new JsonArray();
-
-                    rowSet.forEach(row ->
-
-                            batch.add(new JsonObject()
-                                    .put("discoveryId", discoveryId)
-                                    .put("device_ip", row.getString("device_ip"))
-                                    .put("port", row.getInteger("port"))
-                                    .put("matched_credentials", row.getJsonArray("matched_credentials"))
-                                    .put("status", row.getString("status"))
-
-                            ));
-
-                    promise.complete(batch);
-                })
-                .onFailure(promise::fail);
-
-        return promise.future();
-
+                .execute(Tuple.of(
+                        body.getInteger("discoveryId"),
+                        body.getString("ip"),
+                        body.getString("protocol", "SSH"),
+                        body.getJsonObject("data").encode() //convert to Json String
+                ))
+                .onFailure(err -> LOG.error("Error in add Polling data : {}", err.getMessage()));
     }
 
-    private Future<Void> handleBatchAndContinue(int discoveryId, int batchSize, int offSet, JsonArray batch, Promise<Void> donePromise) {
+    private void getPollingResults(Message<JsonObject> msg) {
 
-        if (batch.isEmpty()) {
+        JsonObject body = msg.body();
 
-            LOG.info("Empty batch reached - completing stream");
+        var discoveryId = body.getInteger("discoveryId");
 
-            donePromise.complete();
+        String sql = """
+                    SELECT device_ip, protocol,
+                           json_agg(
+                               json_build_object(
+                                   'result', result,
+                                   'polled_at', polled_at
+                               ) ORDER BY polled_at ASC
+                           ) AS results
+                    FROM polling_results
+                    WHERE discovery_id = $1
+                    GROUP BY device_ip, protocol;
+                """;
 
-            return Future.succeededFuture();
+        pool.preparedQuery(sql)
+                .execute(Tuple.of(discoveryId))
+                .onSuccess(rows -> {
 
-        }
+                    JsonArray resultArray = new JsonArray();
 
-        // Stream batch to eventBus immediately (no caching)
+                    for (Row row : rows) {
 
-        vertx.eventBus().publish(AppConfig.EB_ZMQ_SEND_TO_GO, batch);
+                        JsonObject obj = new JsonObject()
+                                .put("device_ip", row.getString("device_ip"))
+                                .put("protocol", row.getString("protocol"))
+                                .put("results", new JsonArray(row.getValue("results").toString()));
 
-        return fetchBatch(discoveryId, batchSize, offSet + batchSize)
-                .compose(nextBatch -> handleBatchAndContinue(discoveryId, batchSize, offSet + batchSize, nextBatch, donePromise));
+                        resultArray.add(obj);
+                    }
+
+                    msg.reply(resultArray);
+
+
+                })
+                .onFailure(err -> msg.fail(500, err.getMessage()));
 
     }
 
 }
+
+
+//No memory OverHead Direct send each batch to ZMQ using eventBus
+//    private void handleGetAllReachableDevicesForPolling(Message<JsonObject> msg) {
+//
+//        var body = msg.body();
+//
+//        var discoveryId = body.getString("discoveryId");
+//
+//        var batchSize = body.getInteger("batchSize");
+//
+//        if (discoveryId == null || batchSize == null) {
+//
+//            msg.fail(500, "DiscoveryID or BatchSize can not be null.");
+//
+//            return;
+//
+//        }
+//
+//        fetchAllBatchesStreamed(Integer.parseInt(discoveryId), batchSize)
+//                .onSuccess(v -> {
+//                    LOG.info("✅ Completed streaming all reachable devices for discoveryId {}", discoveryId);
+//                    msg.reply(new JsonObject().put("status", "completed"));
+//                })
+//                .onFailure(err -> {
+//                    LOG.error("Failed to fetch reachable devices: {}", err.getMessage());
+//                    msg.fail(500, err.getMessage());
+//                });
+//
+//    }
+//
+//    private Future<Void> fetchAllBatchesStreamed(int discoveryId, int batchSize) {
+//
+//        Promise<Void> promise = Promise.promise();
+//
+//        // Start from offset 0 and fetch iteratively
+//        fetchBatch(discoveryId, batchSize, 0)
+//                .compose(batch -> handleBatchAndContinue(discoveryId, batchSize, 0, batch, promise));
+//
+//        return promise.future();
+//
+//    }
+//
+//    private Future<JsonArray> fetchBatch(int discoveryId, int batchSize, int offSet) {
+//
+//        Promise<JsonArray> promise = Promise.promise();
+//
+//        String sql = """
+//                SELECT *
+//                FROM discovered_devices
+//                WHERE discovery_id = $1 AND status = 'REACHABLE'
+//                LIMIT $2 OFFSET $3
+//                """;
+//
+//        pool.preparedQuery(sql)
+//                .execute(Tuple.of(discoveryId, batchSize, offSet))
+//                .onSuccess(rowSet -> {
+//
+//                    JsonArray batch = new JsonArray();
+//
+//                    rowSet.forEach(row ->
+//
+//                            batch.add(new JsonObject()
+//                                    .put("discoveryId", discoveryId)
+//                                    .put("device_ip", row.getString("device_ip"))
+//                                    .put("port", row.getInteger("port"))
+//                                    .put("matched_credentials", row.getJsonArray("matched_credentials"))
+//                                    .put("status", row.getString("status"))
+//
+//                            ));
+//
+//                    promise.complete(batch);
+//                })
+//                .onFailure(promise::fail);
+//
+//        return promise.future();
+//
+//    }
+//
+//    private Future<Void> handleBatchAndContinue(int discoveryId, int batchSize, int offSet, JsonArray batch, Promise<Void> donePromise) {
+//
+//        if (batch.isEmpty()) {
+//
+//            LOG.info("Empty batch reached - completing stream");
+//
+//            donePromise.complete();
+//
+//            return Future.succeededFuture();
+//
+//        }
+//
+//        // Stream batch to eventBus immediately (no caching)
+//
+//        vertx.eventBus().publish(AppConfig.EB_ZMQ_SEND_TO_GO, batch);
+//
+//        return fetchBatch(discoveryId, batchSize, offSet + batchSize)
+//                .compose(nextBatch -> handleBatchAndContinue(discoveryId, batchSize, offSet + batchSize, nextBatch, donePromise));
+//
+//    }

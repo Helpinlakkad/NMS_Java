@@ -1,6 +1,7 @@
 package com.nms.controller;
 
 import com.nms.config.AppConfig;
+import com.nms.repository.ServiceRepository;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
@@ -13,9 +14,13 @@ public class ServiceController {
 
     private final Vertx vertx;
 
-    public ServiceController(Vertx vertx) {
+    private final ServiceRepository serviceRepository;
+
+    public ServiceController(Vertx vertx, ServiceRepository serviceRepository) {
 
         this.vertx = vertx;
+
+        this.serviceRepository = serviceRepository;
 
     }
 
@@ -179,6 +184,56 @@ public class ServiceController {
         } catch (Exception e) {
 
             LOG.error("Error During Stop Provisioning : {}", e.getMessage());
+
+            routingContext.response()
+                    .end(new JsonObject()
+                            .put("status", "fail")
+                            .put("Message", e.getMessage())
+                            .toBuffer()
+                    );
+
+        }
+
+    }
+
+    public void getPollingResultsByDiscoveryId(RoutingContext routingContext) {
+
+        try {
+
+            var discoveryId = Integer.parseInt(routingContext.pathParam("discoveryProfileId"));
+
+            if (discoveryId <= 0) {
+
+                throw new Exception("DiscoveryId is not valid");
+
+            }
+
+            serviceRepository.getPollingResultsByDiscoveryId(discoveryId)
+                    .onSuccess(message -> {
+
+                        routingContext.response()
+                                .end(new JsonObject()
+                                        .put("status", "success")
+                                        .put("Message", message)
+                                        .toBuffer()
+                                );
+
+                    })
+                    .onFailure(err -> {
+
+                        routingContext.response()
+                                .end(new JsonObject()
+                                        .put("status", "fail")
+                                        .put("Message", err.getMessage())
+                                        .toBuffer()
+                                );
+
+                    });
+
+
+        } catch (Exception e) {
+
+            LOG.error("Error During Get Polling Result : {}", e.getMessage());
 
             routingContext.response()
                     .end(new JsonObject()
