@@ -1,29 +1,23 @@
 package com.nms.routes;
 
-import com.nms.controller.CredentialController;
-import com.nms.controller.DiscoveryController;
+import com.nms.config.Constants;
+import com.nms.controller.ApiHandler;
 import com.nms.controller.ServiceController;
-import com.nms.repository.CredentialRepository;
-import com.nms.repository.DiscoveryRepository;
-import com.nms.repository.ServiceRepository;
+import com.nms.repository.Repository;
 import io.vertx.core.Vertx;
 import io.vertx.ext.web.Router;
 
 public class RouteRegistry {
 
-    private final CredentialController credentialController;
-
-    private final DiscoveryController discoveryController;
-
     private final ServiceController serviceController;
 
-    public RouteRegistry(Vertx vertx, CredentialRepository credentialRepository, DiscoveryRepository discoveryRepository, ServiceRepository serviceRepository) {
+    private final ApiHandler apiHandler;
 
-        this.credentialController = new CredentialController(credentialRepository);
+    public RouteRegistry(Vertx vertx, Repository repository) {
 
-        this.discoveryController = new DiscoveryController(discoveryRepository);
+        this.serviceController = new ServiceController(vertx, repository);
 
-        this.serviceController = new ServiceController(vertx,serviceRepository);
+        this.apiHandler = new ApiHandler(repository);
 
     }
 
@@ -31,35 +25,47 @@ public class RouteRegistry {
 
         // ---- CREDENTIAL ROUTES ----
 
-        restAPI.post("/createCredential").handler(credentialController::createCredential);
+        restAPI.post("/createCredential")
+                .handler(ctx -> apiHandler.createApiHandler(ctx, Constants.DATABASE_TABLE_CREDENTIAL_PROFILE));
 
-        restAPI.get("/getAllCredentials").handler(credentialController::getAllCredentials);
+        restAPI.get("/getAllCredentials")
+                .handler(ctx -> apiHandler.getAllApiHandler(ctx, Constants.DATABASE_TABLE_CREDENTIAL_PROFILE));
 
-        restAPI.patch("/updateCredential").handler(credentialController::updateCredential);
+        restAPI.get("/getCredential/:" + Constants.CREDENTIAL_PROFILE_ID)
+                .handler(ctx -> apiHandler.getByIdApiHandler(ctx, Constants.DATABASE_TABLE_CREDENTIAL_PROFILE));
 
-        restAPI.delete("/deleteCredential").handler(credentialController::deleteCredential);
+        restAPI.put("/updateCredential/:" + Constants.CREDENTIAL_PROFILE_ID)
+                .handler(ctx -> apiHandler.updateApiHandler(ctx, Constants.DATABASE_TABLE_CREDENTIAL_PROFILE));
+
+        restAPI.delete("/deleteCredential/:" + Constants.CREDENTIAL_PROFILE_ID)
+                .handler(ctx -> apiHandler.deleteApiHandler(ctx, Constants.DATABASE_TABLE_CREDENTIAL_PROFILE));
 
         // ---- DISCOVERY ROUTES ----
 
-        restAPI.post("/createDiscovery").handler(discoveryController::createDiscovery);
+        restAPI.post("/createDiscovery")
+                .handler(ctx -> apiHandler.createApiHandler(ctx, Constants.DATABASE_TABLE_DISCOVERY_PROFILE));
 
-        restAPI.get("/getAllDiscovery").handler(discoveryController::getAllDiscovery);
+        restAPI.get("/getAllDiscovery")
+                .handler(ctx -> apiHandler.getAllApiHandler(ctx, Constants.DATABASE_TABLE_DISCOVERY_PROFILE));
 
-        restAPI.patch("/updateDiscovery").handler(discoveryController::updateDiscovery);
+        restAPI.put("/updateDiscovery/:" + Constants.DISCOVERY_PROFILE_ID)
+                .handler(ctx -> apiHandler.updateApiHandler(ctx, Constants.DATABASE_TABLE_DISCOVERY_PROFILE));
 
-        restAPI.delete("/deleteDiscovery").handler(discoveryController::deleteDiscovery);
+        restAPI.delete("/deleteDiscovery/:" + Constants.DISCOVERY_PROFILE_ID)
+                .handler(ctx -> apiHandler.deleteApiHandler(ctx, Constants.DATABASE_TABLE_DISCOVERY_PROFILE));
 
-        restAPI.get("/getDiscovery/:discoveryProfileId").handler(discoveryController::getDiscoveryById);
+        restAPI.get("/getDiscovery/:" + Constants.DISCOVERY_PROFILE_ID)
+                .handler(ctx -> apiHandler.getByIdApiHandler(ctx, Constants.DATABASE_TABLE_DISCOVERY_PROFILE));
 
         // ---- SERVICE ROUTES ----
 
-        restAPI.get("/startDiscovery/:discoveryProfileId").handler(serviceController::startDiscoveryByDiscoveryId);
+        restAPI.get("/startDiscovery/:" + Constants.DISCOVERY_PROFILE_ID).handler(serviceController::startDiscoveryByDiscoveryId);
 
-        restAPI.get("/startProvision/:discoveryProfileId").handler(serviceController::startProvisionByDiscoveryId);
+        restAPI.get("/startProvision/:" + Constants.DISCOVERY_PROFILE_ID).handler(serviceController::startProvisionByDiscoveryId);
 
-        restAPI.get("/stopProvision/:discoveryProfileId").handler(serviceController::stopProvisionByDiscoveryId);
+        restAPI.get("/stopProvision/:" + Constants.DISCOVERY_PROFILE_ID).handler(serviceController::stopProvisionByDiscoveryId);
 
-        restAPI.get("/getPollingResult/:discoveryProfileId").handler(serviceController::getPollingResultsByDiscoveryId);
+        restAPI.get("/getPollingResult/:" + Constants.DISCOVERY_PROFILE_ID).handler(serviceController::getPollingResultsByDiscoveryId);
 
     }
 

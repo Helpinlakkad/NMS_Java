@@ -1,13 +1,15 @@
 package com.nms.services;
 
 import com.nms.config.AppConfig;
-import com.nms.repository.CredentialRepository;
-import com.nms.repository.DiscoveryRepository;
+import com.nms.config.Constants;
+import com.nms.repository.Repository;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
+import io.vertx.core.net.NetClient;
+import io.vertx.core.net.NetClientOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -18,28 +20,24 @@ import java.util.List;
 
 public class DiscoveryService extends AbstractVerticle {
 
-    private static final Logger LOG = LoggerFactory.getLogger(DiscoveryService.class);
+    private static final Logger logger = LoggerFactory.getLogger(DiscoveryService.class);
 
-    private final CredentialRepository credentialRepository;
-
-    private final DiscoveryRepository discoveryRepository;
+    private final Repository repository;
 
     private static final int BATCH_SIZE = 50;
 
     private static final int MAX_RETRIES = 3;
 
-    public DiscoveryService(CredentialRepository credentialRepository, DiscoveryRepository discoveryRepository) {
+    public DiscoveryService(Repository repository) {
 
-        this.discoveryRepository = discoveryRepository;
-
-        this.credentialRepository = credentialRepository;
+        this.repository = repository;
 
     }
 
     @Override
     public void start(Promise<Void> startPromise) {
 
-        LOG.info("Discovery Service Started.");
+        logger.info("Discovery Service Started.");
 
         vertx.eventBus().<JsonObject>consumer(AppConfig.EB_START_DISCOVERY, message -> {
 
@@ -47,25 +45,25 @@ public class DiscoveryService extends AbstractVerticle {
 
             var discoveryId = body.getString("discoveryProfileId");
 
-            LOG.info("Received discovery start event for ID {}", discoveryId);
+            logger.info("Received discovery start event for ID {}", discoveryId);
 
             startDiscovery(Integer.parseInt(discoveryId))
                     .onSuccess(reachableDevices -> {
 
-                        LOG.info("✅ Discovery completed for ID {}. Total Reachable Devices : {}", discoveryId, reachableDevices.size());
+                        logger.info("✅ Discovery completed for ID {}. Total Reachable Devices : {}", discoveryId, reachableDevices.size());
 
                         JsonObject response = new JsonObject()
-                                .put("discoveryId", discoveryId)
-                                .put("totalReachable", reachableDevices.size())
-                                .put("reachableDevices", reachableDevices)
-                                .put("timestamp", System.currentTimeMillis());
+                                .put(Constants.DISCOVERY_ID, discoveryId)
+                                .put(Constants.TOTAL_REACHABLE, reachableDevices.size())
+                                .put(Constants.REACHABLE_DEVICES, reachableDevices)
+                                .put(Constants.TIMESTAMP, System.currentTimeMillis());
 
                         message.reply(response);
 
                     })
                     .onFailure(err -> {
 
-                        LOG.error("❌ Discovery failed for ID {}: {}", discoveryId, err.getMessage());
+                        logger.error("❌ Discovery failed for ID {}: {}", discoveryId, err.getMessage());
 
                         message.fail(500, err.getMessage());
 
@@ -83,42 +81,65 @@ public class DiscoveryService extends AbstractVerticle {
 
         Promise<JsonArray> promise = Promise.promise();
 
-        discoveryRepository.getDiscoveryById(discoveryId)
-                .compose(discoveryProfileData -> {
+        repository.getById(new JsonObject().put(Constants.ID, discoveryId), Constants.DATABASE_TABLE_DISCOVERY_PROFILE)
+                .compose(discoveryProfileArray -> {
 
-                    if (discoveryProfileData == null) {
+                    if (discoveryProfileArray == null || discoveryProfileArray.isEmpty()) {
 
-                        LOG.warn("Discovery with ID {} is not found.", discoveryId);
+                        logger.warn("Discovery with ID {} is not found.", discoveryId);
 
                         return Future.failedFuture("Discovery ID " + discoveryId + " not found");
 
                     }
 
-                    var hostIPs = new JsonArray().add(discoveryProfileData.getString("hostIP"));  // support multiple devices later
+                    var discoveryProfileData = discoveryProfileArray.getJsonObject(0);
 
-                    var port = discoveryProfileData.getInteger("port");
+                    var hostIPs = new JsonArray().add(discoveryProfileData.getString(Constants.IP));  // support multiple devices later
 
-                    var credentialProfileNames = discoveryProfileData.getJsonArray("credentialProfileNames");
+                    var port = discoveryProfileData.getInteger(Constants.PORT);
+
+                    var credentialProfileNamesRaw = discoveryProfileData.getValue(Constants.CREDENTIAL_PROFILES);
+
+                    JsonArray credentialProfileNames;
+
+                    if (credentialProfileNamesRaw instanceof JsonArray arr) {
+
+                        credentialProfileNames = arr;
+
+                    } else if (credentialProfileNamesRaw instanceof String str) {
+
+                        credentialProfileNames = new JsonArray(str);
+
+                    } else {
+
+                        credentialProfileNames = new JsonArray();
+
+                    }
+
+                    logger.info("Discovery Profile : {}", discoveryProfileData);
+                    logger.info("Credential Profile Names in discovery : {}", credentialProfileNames);
 
 
                     // Step 1: Get all credentials
-                    return credentialRepository.getAllCredentials()
-                            .compose(allCreds ->
-                                    // Step 2: Enqueue devices into discovery_queue
-                                    enqueueDevices(discoveryId, hostIPs, port, credentialProfileNames).map(allCreds))
+                    return repository.getAll(Constants.DATABASE_TABLE_CREDENTIAL_PROFILE, new JsonArray(), new JsonObject(), null, null)
+                            .compose(allCreds -> {
+                                // Step 2: Enqueue devices into discovery_queue
+                                logger.info("AllCreds : {}", allCreds.encodePrettily());
+                                return enqueueDevices(discoveryId, hostIPs, port, credentialProfileNames).map(allCreds);
+                            })
                             .compose(allCreds ->
                                     // Step 3: Process queue in batches
                                     processDiscoveryQueue(discoveryId, allCreds, credentialProfileNames))
                             .compose(v ->
                                     //Step 4: Fetch Reachable devices from DB
-                                    discoveryRepository.getAllReachableDevicesByDiscoveryIdBatchWise(discoveryId, BATCH_SIZE)
+                                    repository.getAllReachableDevicesByDiscoveryIdBatchWise(discoveryId, BATCH_SIZE)
                             );
 
                 })
                 .onSuccess(promise::complete)
                 .onFailure(err -> {
 
-                    LOG.error("Failed to fetch discovery {}: {}", discoveryId, err.getMessage());
+                    logger.error("Failed to fetch discovery {}: {}", discoveryId, err.getMessage());
 
                     promise.fail(err.getMessage());
 
@@ -140,28 +161,47 @@ public class DiscoveryService extends AbstractVerticle {
 
             int to = Math.min(from + BATCH_SIZE, total);
 
-            List<JsonObject> batch = new ArrayList<>();
+            JsonArray batch = new JsonArray();
 
             for (int i = from; i < to; i++) {
 
                 batch.add(new JsonObject()
-                        .put("discovery_id", discoveryId)
-                        .put("device_ip", hostIPs.getString(i))
-                        .put("port", port)
-                        .put("protocol", "SSH")
-                        .put("status", "PENDING")
-                        .put("max_retries", MAX_RETRIES)
-                        .put("matched_credentials", credentialProfileNames)
+                        .put(Constants.DISCOVERY_ID, discoveryId)
+                        .put(Constants.DEVICE_IP, hostIPs.getString(i))
+                        .put(Constants.PORT, port)
+                        .put(Constants.PROTOCOL, Constants.SSH)
+                        .put(Constants.STATUS, Constants.PENDING)
+                        .put(Constants.MATCHED_CREDENTIALS, credentialProfileNames)
                 );
 
             }
 
             int finalFrom = from + 1;
 
+            /*
+            INSERT INTO discovery_queue(
+                    discovery_id, device_ip, port, status, matched_credentials
+                ) VALUES ($1, $2, $3, $4::text, $5::jsonb)
+                ON CONFLICT (discovery_id, device_ip)
+                        DO UPDATE SET
+                            port = EXCLUDED.port,
+                            status = EXCLUDED.status,
+                            matched_credentials = EXCLUDED.matched_credentials,
+                            updated_at = now()
+                """;
+             */
+
+            var conflictCols = new JsonArray().add(Constants.DISCOVERY_ID).add(Constants.DEVICE_IP);
+
+            var onConflictUpdateCol = new JsonObject()
+                    .put(Constants.PORT, Constants.PORT)
+                    .put(Constants.STATUS, Constants.STATUS)
+                    .put(Constants.MATCHED_CREDENTIALS, Constants.MATCHED_CREDENTIALS);
+
             batchFutures.add(
-                    discoveryRepository.insertDiscoveryQueueBatch(batch)
-                            .onSuccess(v -> LOG.info("Inserted batch {}-{} into discovery_queue", finalFrom, to))
-                            .onFailure(err -> LOG.error("Failed to insert batch {}-{} in to discovery_queue : {}", finalFrom, to, err.getMessage()))
+                    repository.upsert(batch, conflictCols, onConflictUpdateCol, Constants.DATABASE_TABLE_DISCOVERY_QUEUE)
+                            .onSuccess(v -> logger.info("Inserted batch {}-{} into discovery_queue", finalFrom, to))
+                            .onFailure(err -> logger.error("Failed to insert batch {}-{} in to discovery_queue : {}", finalFrom, to, err.getMessage()))
                             .mapEmpty()
             );
 
@@ -204,7 +244,7 @@ public class DiscoveryService extends AbstractVerticle {
 
         // Fetch batch from DB with FOR UPDATE SKIP LOCKED
 
-        discoveryRepository.fetchPendingBatch(discoveryId, BATCH_SIZE)
+        repository.fetchPendingBatch(discoveryId, BATCH_SIZE)
                 .onSuccess(batch -> {
 
                     if (batch == null || batch.isEmpty()) {
@@ -221,23 +261,29 @@ public class DiscoveryService extends AbstractVerticle {
 
                         JsonObject deviceAsJson = (JsonObject) device;
 
-                        String ip = deviceAsJson.getString("device_ip");
+                        String ip = deviceAsJson.getString(Constants.DEVICE_IP);
 
-                        int port = deviceAsJson.getInteger("port");
+                        int port = deviceAsJson.getInteger(Constants.PORT);
 
-                        LOG.info("device IP : {} and PORT : {}", ip, port);
+                        logger.info("device IP : {} and PORT : {}", ip, port);
 
-                        futures.add(checkDevice(ip, port, discoveryId, allCreds, credentialProfileNames, 0)
+                        futures.add(checkDevice(ip, port, discoveryId, allCreds, credentialProfileNames)
                                 .compose(deviceObj -> {
 
+                                    var currentDeviceStatus = deviceObj.getString(Constants.STATUS);
+
+                                    var condition = new JsonObject()
+                                            .put(Constants.DISCOVERY_ID, discoveryId)
+                                            .put(Constants.DEVICE_IP, ip);
+
                                     // Update discovery_queue status to REACHABLE/UNREACHABLE
-                                    return discoveryRepository.updateDiscoveryQueueStatus(discoveryId, ip, deviceObj.getString("status"))
+                                    return repository.update(new JsonObject().put(Constants.STATUS, currentDeviceStatus), Constants.DATABASE_TABLE_DISCOVERY_QUEUE, condition)
                                             .map(deviceObj);  // propagate deviceStatus
 
                                 })
-                                .onSuccess(deviceObj -> LOG.info("Device processed: {}", deviceObj))
+                                .onSuccess(deviceObj -> logger.info("Device processed: {}", deviceObj))
 
-                                .onFailure(err -> LOG.error("Device failed {}: {}", ip, err.getMessage()))
+                                .onFailure(err -> logger.error("Device failed {}: {}", ip, err.getMessage()))
 
                                 .mapEmpty()
 
@@ -258,7 +304,7 @@ public class DiscoveryService extends AbstractVerticle {
 
                                 } else {
 
-                                    LOG.error("Batch failed: {}", ar.cause().getMessage());
+                                    logger.error("Batch failed: {}", ar.cause().getMessage());
 
                                     batchPromise.fail(ar.cause());
 
@@ -273,20 +319,20 @@ public class DiscoveryService extends AbstractVerticle {
         return batchPromise.future();
     }
 
-    private Future<JsonObject> checkDevice(String ip, int port, int discoveryId, JsonArray allCreds, JsonArray credentialProfileNames, int retryCount) {
+    private Future<JsonObject> checkDevice(String ip, int port, int discoveryId, JsonArray allCreds, JsonArray credentialProfileNames) {
 
         Promise<JsonObject> promise = Promise.promise();
 
         List<String> matchedCredNames = allCreds.stream()
                 .map(c -> (JsonObject) c)
-                .filter(c -> credentialProfileNames.contains(c.getString("credentialProfileName")))
-                .map(c -> c.getString("credentialProfileName"))
+                .filter(c -> credentialProfileNames.contains(c.getString(Constants.CREDENTIAL_PROFILE_NAME)))
+                .map(c -> c.getString(Constants.CREDENTIAL_PROFILE_NAME))
                 .distinct()
                 .toList();
 
         if (matchedCredNames.isEmpty()) {
 
-            LOG.warn("No credentials matched for device {} in discovery {}", ip, discoveryId);
+            logger.warn("No credentials matched for device {} in discovery {}", ip, discoveryId);
 
         }
 
@@ -308,33 +354,19 @@ public class DiscoveryService extends AbstractVerticle {
                 })
                 .compose(status -> {
 
-                    var isFinalAttempt = ("REACHABLE".equals(status) || retryCount >= MAX_RETRIES);
-
                     JsonObject deviceObj = new JsonObject()
-                            .put("discovery_id", discoveryId)
-                            .put("device_ip", ip)
-                            .put("port", port)
-                            .put("protocol", "SSH")
-                            .put("status", status)
-                            .put("matched_credentials", new JsonArray(matchedCredNames))
-                            .put("retry_count", retryCount)
-                            .put("max_retries", MAX_RETRIES);
+                            .put(Constants.DISCOVERY_ID, discoveryId)
+                            .put(Constants.DEVICE_IP, ip)
+                            .put(Constants.PORT, port)
+                            .put(Constants.PROTOCOL, Constants.SSH)
+                            .put(Constants.STATUS, status)
+                            .put(Constants.MATCHED_CREDENTIALS, new JsonArray(matchedCredNames));
 
                     // Upsert discovered_devices table
-                    // Update DB only when final attempt reached
 
-                    if (isFinalAttempt) {
-
-                        return discoveryRepository.upsertDiscoveredDevice(deviceObj)
-                                .map(deviceObj);
-
-                    } else {
-
-                        LOG.info("Retrying device {} (retry {}/{})", ip, retryCount + 1, MAX_RETRIES);
-
-                        return checkDevice(ip, port, discoveryId, allCreds, credentialProfileNames, retryCount + 1);
-
-                    }
+                    return repository.upsertDiscoveredDevice(deviceObj)
+                            .onFailure(err -> logger.error("Upsert failed for discovered_devices {}: {}", ip, err.getMessage()))
+                            .map(deviceObj);
 
                 })
                 .onComplete(promise);
@@ -347,27 +379,45 @@ public class DiscoveryService extends AbstractVerticle {
 
     private boolean isPingReachable(String hostIP) {
 
-        try {
+        int timeout = 500; // per attempt
 
-            int timeout = 1000;
+        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
 
-            return InetAddress.getByName(hostIP).isReachable(timeout);
+            try {
 
-        } catch (Exception e) {
+                if (InetAddress.getByName(hostIP).isReachable(timeout)) {
 
-            LOG.error("Ping failed for {}: {}", hostIP, e.getMessage());
+                    logger.info("✅ Host {} reachable on attempt {}", hostIP, attempt);
 
-            return false;
+                    return true; // success → stop retrying
+
+                }
+
+            } catch (Exception e) {
+
+                logger.error("Ping attempt {} failed for {}: {}", attempt, hostIP, e.getMessage());
+
+            }
 
         }
 
+        logger.warn("❌ Host {} unreachable after {} attempts", hostIP, MAX_RETRIES);
+
+        return false; // failed after all retries
+
     }
+
 
     private Future<Boolean> isTcpReachable(String ip, int port) {
 
         Promise<Boolean> promise = Promise.promise();
 
-        vertx.createNetClient().connect(port, ip)
+        NetClientOptions options = new NetClientOptions()
+                .setConnectTimeout(500);
+
+        NetClient client = vertx.createNetClient(options);
+
+        client.connect(port, ip)
                 .onComplete(res -> {
 
                     if (res.succeeded()) {
@@ -377,6 +427,8 @@ public class DiscoveryService extends AbstractVerticle {
                         promise.complete(true);
 
                     } else {
+
+                        logger.info("TCP FAILED.");
 
                         promise.complete(false);
 

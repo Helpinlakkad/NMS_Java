@@ -1,6 +1,8 @@
 package com.nms.services;
 
 import com.nms.config.AppConfig;
+import com.nms.config.Constants;
+import com.nms.repository.Repository;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Promise;
 import io.vertx.core.eventbus.Message;
@@ -12,18 +14,19 @@ import org.zeromq.SocketType;
 import org.zeromq.ZMQ;
 import org.zeromq.ZContext;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Enterprise-grade ZMQ Communication Verticle.
  * Handles request–reply pattern between Vert.x and Go plugin services.
- * Tracks request timeouts, retries, and correlation using requestId.
+ * Tracks request timeouts and correlation using requestId.
  */
 public class ZMQCommunication extends AbstractVerticle {
 
-    private static final Logger LOG = LoggerFactory.getLogger(ZMQCommunication.class);
+    private static final Logger logger = LoggerFactory.getLogger(ZMQCommunication.class);
+
+    private final Repository repository;
 
     private ZContext context;
 
@@ -31,8 +34,14 @@ public class ZMQCommunication extends AbstractVerticle {
 
     private ZMQ.Socket subSocket;
 
+    public ZMQCommunication(Repository repository) {
+
+        this.repository = repository;
+
+    }
+
     // Request tracking
-    private final Map<String, PendingRequest> pendingRequests = new HashMap<>();
+    private static final Map<String, PendingRequest> pendingRequests = new ConcurrentHashMap<>();
 
     private static final String REQUEST_ID = "requestId";
 
@@ -71,13 +80,13 @@ public class ZMQCommunication extends AbstractVerticle {
             // Clean up timed-out requests periodically
             vertx.setPeriodic(REQUEST_TIMEOUT_CHECK_INTERVAL, id -> checkTimeouts());
 
-            LOG.info("✅ ZMQCommunication Verticle started and connected to Go plugin.");
+            logger.info("✅ ZMQCommunication Verticle started and connected to Go plugin.");
 
             startPromise.complete();
 
         } catch (Exception e) {
 
-            LOG.error("❌ Failed to start ZMQCommunication Verticle: {}", e.getMessage(), e);
+            logger.error("❌ Failed to start ZMQCommunication Verticle: {}", e.getMessage(), e);
 
             startPromise.fail(e);
 
@@ -96,7 +105,7 @@ public class ZMQCommunication extends AbstractVerticle {
 
             JsonObject payload = message.body();
 
-            LOG.debug("📨 Received payload on EB_ZMQ_SEND_TO_GO: {}", payload.encodePrettily());
+            logger.debug("📨 Received payload on EB_ZMQ_SEND_TO_GO: {}", payload.encodePrettily());
 
             JsonArray devicesArray = new JsonArray();
 
@@ -130,7 +139,7 @@ public class ZMQCommunication extends AbstractVerticle {
 
             }
 
-            LOG.info("📦 Sending {} devices individually to Go for discoveryId={}", devicesArray.size(), discoveryId);
+            logger.info("📦 Sending {} devices individually to Go for discoveryId={}", devicesArray.size(), discoveryId);
 
             for (int i = 0; i < devicesArray.size(); i++) {
 
@@ -153,13 +162,13 @@ public class ZMQCommunication extends AbstractVerticle {
 
                 if (!sent) {
 
-                    LOG.warn("⚠️ Failed to send device {} to Go (queue full).", device.getString("device_ip"));
+                    logger.warn("⚠️ Failed to send device {} to Go (queue full).", device.getString("device_ip"));
 
                     pendingRequests.remove(requestId);
 
                 } else {
 
-                    LOG.debug("📤 Sent device {} → Go (requestId={})", device.getString("device_ip"), requestId);
+                    logger.debug("📤 Sent device {} → Go (requestId={})", device.getString("device_ip"), requestId);
 
                 }
 
@@ -167,7 +176,7 @@ public class ZMQCommunication extends AbstractVerticle {
 
         } catch (Exception e) {
 
-            LOG.error("Error sending per-device messages to Go: {}", e.getMessage(), e);
+            logger.error("Error sending per-device messages to Go: {}", e.getMessage(), e);
 
             message.fail(500, "Internal ZMQ send error");
 
@@ -204,20 +213,25 @@ public class ZMQCommunication extends AbstractVerticle {
 
                     response.remove(REQUEST_ID);
 
-                    LOG.info("Response from Go : {}",response.encodePrettily());
+                    logger.info("Response from Go : {}", response.encodePrettily());
 
-                    LOG.debug("📥 Received response from Go for requestId={}", requestId);
+                    logger.debug("📥 Received response from Go for requestId={}", requestId);
 
-                    vertx.eventBus().send(AppConfig.EB_ADD_POLLING_RESULT_TO_DB,response);
+                    var formattedResponse = new JsonObject()
+                            .put(Constants.DISCOVERY_ID, response.getValue("discoveryId"))
+                            .put(Constants.DEVICE_IP, response.getValue("ip"))
+                            .put(Constants.PROTOCOL, Constants.SSH)
+                            .put(Constants.RESULT, response.getValue(Constants.DATA));
+
+                    repository.create(formattedResponse, Constants.DATABASE_TABLE_POLLING_RESULT)
+                            .onFailure(err -> logger.error("Error in add Polling data : {}", err.getMessage()));
 
                     pending.message.reply(response);
 
                 } else {
                     // If it's a general broadcast or unmatched response
 
-                    LOG.debug("📡 Untracked Go message received, publishing to event bus.");
-
-//                    vertx.eventBus().publish(AppConfig.EB_ZMQ_RECEIVE_FROM_GO, response);
+                    logger.debug("📡 Untracked Go message received, publishing to event bus.");
 
                 }
 
@@ -225,7 +239,7 @@ public class ZMQCommunication extends AbstractVerticle {
 
         } catch (Exception e) {
 
-            LOG.error("ZMQ Response Listener Error: {}", e.getMessage(), e);
+            logger.error("ZMQ Response Listener Error: {}", e.getMessage(), e);
 
         }
 
@@ -241,7 +255,7 @@ public class ZMQCommunication extends AbstractVerticle {
 
             if (now - entry.getValue().timestamp() >= REQUEST_TIMEOUT_MS) {
 
-                LOG.warn("⏳ Request {} timed out", entry.getKey());
+                logger.warn("⏳ Request {} timed out", entry.getKey());
 
                 entry.getValue().message().fail(408, "Request timed out");
 
@@ -266,7 +280,7 @@ public class ZMQCommunication extends AbstractVerticle {
 
         pendingRequests.clear();
 
-        LOG.info("🛑 ZMQCommunication Verticle stopped and cleaned up.");
+        logger.info("🛑 ZMQCommunication Verticle stopped and cleaned up.");
 
         stopPromise.complete();
 

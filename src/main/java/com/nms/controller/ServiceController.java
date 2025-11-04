@@ -1,7 +1,8 @@
 package com.nms.controller;
 
 import com.nms.config.AppConfig;
-import com.nms.repository.ServiceRepository;
+import com.nms.config.Constants;
+import com.nms.repository.Repository;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
@@ -10,17 +11,17 @@ import org.slf4j.LoggerFactory;
 
 public class ServiceController {
 
-    private static final Logger LOG = LoggerFactory.getLogger(ServiceController.class);
+    private static final Logger logger = LoggerFactory.getLogger(ServiceController.class);
 
     private final Vertx vertx;
 
-    private final ServiceRepository serviceRepository;
+    private final Repository repository;
 
-    public ServiceController(Vertx vertx, ServiceRepository serviceRepository) {
+    public ServiceController(Vertx vertx, Repository repository) {
 
         this.vertx = vertx;
 
-        this.serviceRepository = serviceRepository;
+        this.repository = repository;
 
     }
 
@@ -46,11 +47,11 @@ public class ServiceController {
                         JsonObject result = (JsonObject) res.body();
 
                         JsonObject response = new JsonObject()
-                                .put("status", "success")
-                                .put("discoveryId", discoveryId)
-                                .put("totalReachableDevices", result.getInteger("totalReachable"))
-                                .put("reachableDevices", result.getJsonArray("reachableDevices"))
-                                .put("timestamp", result.getLong("timestamp"));
+                                .put(Constants.STATUS, Constants.SUCCESS)
+                                .put(Constants.DISCOVERY_ID, discoveryId)
+                                .put(Constants.TOTAL_REACHABLE, result.getInteger(Constants.TOTAL_REACHABLE))
+                                .put(Constants.REACHABLE_DEVICES, result.getJsonArray(Constants.REACHABLE_DEVICES))
+                                .put(Constants.TIMESTAMP, result.getLong(Constants.TIMESTAMP));
 
 
                         routingContext.response()
@@ -75,13 +76,13 @@ public class ServiceController {
 
         } catch (Exception e) {
 
-            LOG.error("Error During Start discovery : {}", e.getMessage());
+            logger.error("Error During Start discovery : {}", e.getMessage());
 
             routingContext.response()
                     .setStatusCode(500)
                     .putHeader("Content-Type", "application/json")
                     .end(new JsonObject()
-                            .put("status", "failed")
+                            .put(Constants.STATUS, Constants.FAIL)
                             .put("error", e.getMessage())
                             .toBuffer()
                     );
@@ -103,15 +104,15 @@ public class ServiceController {
             }
 
             var body = new JsonObject()
-                    .put("discoveryProfileId", discoveryId);
+                    .put(Constants.DISCOVERY_PROFILE_ID, discoveryId);
 
             vertx.eventBus().request(AppConfig.EB_START_PROVISION, body)
                     .onSuccess(message -> {
 
                         routingContext.response()
                                 .end(new JsonObject()
-                                        .put("status", "success")
-                                        .put("Message", message.body())
+                                        .put(Constants.STATUS, Constants.SUCCESS)
+                                        .put(Constants.MESSAGE, message.body())
                                         .toBuffer()
                                 );
 
@@ -120,8 +121,8 @@ public class ServiceController {
 
                         routingContext.response()
                                 .end(new JsonObject()
-                                        .put("status", "fail")
-                                        .put("Message", err.getMessage())
+                                        .put(Constants.STATUS, Constants.FAIL)
+                                        .put(Constants.MESSAGE, err.getMessage())
                                         .toBuffer()
                                 );
 
@@ -130,12 +131,12 @@ public class ServiceController {
 
         } catch (Exception e) {
 
-            LOG.error("Error During Start Provisioning : {}", e.getMessage());
+            logger.error("Error During Start Provisioning : {}", e.getMessage());
 
             routingContext.response()
                     .end(new JsonObject()
-                            .put("status", "fail")
-                            .put("Message", e.getMessage())
+                            .put(Constants.STATUS, Constants.FAIL)
+                            .put(Constants.MESSAGE, e.getMessage())
                             .toBuffer()
                     );
 
@@ -147,7 +148,7 @@ public class ServiceController {
 
         try {
 
-            var discoveryId = routingContext.pathParam("discoveryProfileId");
+            var discoveryId = routingContext.pathParam(Constants.DISCOVERY_PROFILE_ID);
 
             if (discoveryId == null) {
 
@@ -156,15 +157,15 @@ public class ServiceController {
             }
 
             var body = new JsonObject()
-                    .put("discoveryProfileId", discoveryId);
+                    .put(Constants.DISCOVERY_PROFILE_ID, discoveryId);
 
             vertx.eventBus().request(AppConfig.EB_STOP_PROVISION, body)
                     .onSuccess(message -> {
 
                         routingContext.response()
                                 .end(new JsonObject()
-                                        .put("status", "success")
-                                        .put("Message", message.body())
+                                        .put(Constants.STATUS, Constants.SUCCESS)
+                                        .put(Constants.MESSAGE, message.body())
                                         .toBuffer()
                                 );
 
@@ -173,8 +174,8 @@ public class ServiceController {
 
                         routingContext.response()
                                 .end(new JsonObject()
-                                        .put("status", "fail")
-                                        .put("Message", err.getMessage())
+                                        .put(Constants.STATUS, Constants.FAIL)
+                                        .put(Constants.MESSAGE, err.getMessage())
                                         .toBuffer()
                                 );
 
@@ -183,12 +184,12 @@ public class ServiceController {
 
         } catch (Exception e) {
 
-            LOG.error("Error During Stop Provisioning : {}", e.getMessage());
+            logger.error("Error During Stop Provisioning : {}", e.getMessage());
 
             routingContext.response()
                     .end(new JsonObject()
-                            .put("status", "fail")
-                            .put("Message", e.getMessage())
+                            .put(Constants.STATUS, Constants.FAIL)
+                            .put(Constants.MESSAGE, e.getMessage())
                             .toBuffer()
                     );
 
@@ -200,7 +201,7 @@ public class ServiceController {
 
         try {
 
-            var discoveryId = Integer.parseInt(routingContext.pathParam("discoveryProfileId"));
+            var discoveryId = Integer.parseInt(routingContext.pathParam(Constants.DISCOVERY_PROFILE_ID));
 
             if (discoveryId <= 0) {
 
@@ -208,13 +209,13 @@ public class ServiceController {
 
             }
 
-            serviceRepository.getPollingResultsByDiscoveryId(discoveryId)
+            repository.getPollingResultsByDiscoveryId(discoveryId)
                     .onSuccess(message -> {
 
                         routingContext.response()
                                 .end(new JsonObject()
-                                        .put("status", "success")
-                                        .put("Message", message)
+                                        .put(Constants.STATUS, Constants.SUCCESS)
+                                        .put(Constants.MESSAGE, message)
                                         .toBuffer()
                                 );
 
@@ -223,8 +224,8 @@ public class ServiceController {
 
                         routingContext.response()
                                 .end(new JsonObject()
-                                        .put("status", "fail")
-                                        .put("Message", err.getMessage())
+                                        .put(Constants.STATUS, Constants.FAIL)
+                                        .put(Constants.MESSAGE, err.getMessage())
                                         .toBuffer()
                                 );
 
@@ -233,12 +234,12 @@ public class ServiceController {
 
         } catch (Exception e) {
 
-            LOG.error("Error During Get Polling Result : {}", e.getMessage());
+            logger.error("Error During Get Polling Result : {}", e.getMessage());
 
             routingContext.response()
                     .end(new JsonObject()
-                            .put("status", "fail")
-                            .put("Message", e.getMessage())
+                            .put(Constants.STATUS, Constants.FAIL)
+                            .put(Constants.MESSAGE, e.getMessage())
                             .toBuffer()
                     );
 
