@@ -1,4 +1,4 @@
-package com.nms.config;
+package com.nms.Util;
 
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;

@@ -1,7 +1,7 @@
 package com.nms.database;
 
-import com.nms.config.AppConfig;
-import com.nms.config.Constants;
+import com.nms.Util.AppConfig;
+import com.nms.Util.Constants;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;

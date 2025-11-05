@@ -1,6 +1,6 @@
 package com.nms.routes;
 
-import com.nms.config.Constants;
+import com.nms.Util.Constants;
 import com.nms.controller.ApiHandler;
 import com.nms.controller.ServiceController;
 import com.nms.repository.Repository;

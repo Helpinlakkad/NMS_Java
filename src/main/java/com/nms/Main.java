@@ -1,6 +1,6 @@
 package com.nms;
 
-import com.nms.config.AppConfig;
+import com.nms.Util.AppConfig;
 import com.nms.database.Database;
 import com.nms.repository.Repository;
 import com.nms.routes.RouteRegistry;

@@ -1,7 +1,7 @@
 package com.nms.services;
 
-import com.nms.config.AppConfig;
-import com.nms.config.Constants;
+import com.nms.Util.AppConfig;
+import com.nms.Util.Constants;
 import com.nms.repository.Repository;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Future;
@@ -298,9 +298,14 @@ public class DiscoveryService extends AbstractVerticle {
 
                                 if (ar.succeeded()) {
 
-                                    // Process next batch recursively
-                                    processNextBatch(discoveryId, allCreds, credentialProfileNames)
-                                            .onComplete(batchPromise);
+                                    // Process next batch recursively in next event loop Tick
+
+                                    vertx.runOnContext(v -> {
+
+                                        processNextBatch(discoveryId, allCreds, credentialProfileNames)
+                                                .onComplete(batchPromise);
+
+                                    });
 
                                 } else {
 

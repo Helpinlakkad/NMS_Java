@@ -1,7 +1,7 @@
 package com.nms.repository;
 
-import com.nms.config.AppConfig;
-import com.nms.config.Constants;
+import com.nms.Util.AppConfig;
+import com.nms.Util.Constants;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
@@ -173,9 +173,11 @@ public class Repository {
 
         fetchNextBatch(discoveryId, batchSize, 0, allBatches)
                 .onSuccess(response -> {
+
                     logger.info("✅ Recursive chain completed with {} batches", response.size());
 
                     promise.complete(response.stream().flatMap(JsonArray::stream).collect(JsonArray::new, JsonArray::add, JsonArray::addAll));
+
                 })
                 .onFailure(err -> {
 
@@ -212,10 +214,15 @@ public class Repository {
 
                     allBatches.add(device);
 
-                    // Fetch next batch
-                    fetchNextBatch(discoveryId, batchSize, offSet + batchSize, allBatches)
-                            .onSuccess(promise::complete)
-                            .onFailure(promise::fail);
+                    // Fetch next batch in next event loop Tick
+
+                    vertx.runOnContext(v -> {
+
+                        fetchNextBatch(discoveryId, batchSize, offSet + batchSize, allBatches)
+                                .onSuccess(promise::complete)
+                                .onFailure(promise::fail);
+
+                    });
 
                 })
                 .onFailure(err -> promise.fail(err.getMessage()));

@@ -1,7 +1,7 @@
 package com.nms.controller;
 
-import com.nms.config.Constants;
-import com.nms.config.Util;
+import com.nms.Util.Constants;
+import com.nms.Util.Util;
 import com.nms.repository.Repository;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;

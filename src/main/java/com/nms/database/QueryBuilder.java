@@ -1,6 +1,6 @@
 package com.nms.database;
 
-import com.nms.config.Constants;
+import com.nms.Util.Constants;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.sqlclient.Tuple;

@@ -1,4 +1,4 @@
-package com.nms.config;
+package com.nms.Util;
 
 public class AppConfig {
 
