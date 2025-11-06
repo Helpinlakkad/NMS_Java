@@ -43,7 +43,7 @@ public class DiscoveryService extends AbstractVerticle {
 
             JsonObject body = message.body();
 
-            var discoveryId = body.getString("discoveryProfileId");
+            var discoveryId = body.getString(Constants.DISCOVERY_PROFILE_ID);
 
             logger.info("Received discovery start event for ID {}", discoveryId);
 
@@ -155,15 +155,15 @@ public class DiscoveryService extends AbstractVerticle {
 
         List<Future<Void>> batchFutures = new ArrayList<>();
 
-        int total = hostIPs.size();
+        var total = hostIPs.size();
 
-        for (int from = 0; from < total; from += BATCH_SIZE) {
+        for (var from = 0; from < total; from += BATCH_SIZE) {
 
-            int to = Math.min(from + BATCH_SIZE, total);
+            var to = Math.min(from + BATCH_SIZE, total);
 
             JsonArray batch = new JsonArray();
 
-            for (int i = from; i < to; i++) {
+            for (var i = from; i < to; i++) {
 
                 batch.add(new JsonObject()
                         .put(Constants.DISCOVERY_ID, discoveryId)
@@ -176,7 +176,7 @@ public class DiscoveryService extends AbstractVerticle {
 
             }
 
-            int finalFrom = from + 1;
+            var finalFrom = from + 1;
 
             /*
             INSERT INTO discovery_queue(
@@ -191,15 +191,13 @@ public class DiscoveryService extends AbstractVerticle {
                 """;
              */
 
-            var conflictCols = new JsonArray().add(Constants.DISCOVERY_ID).add(Constants.DEVICE_IP);
-
             var onConflictUpdateCol = new JsonObject()
                     .put(Constants.PORT, Constants.PORT)
                     .put(Constants.STATUS, Constants.STATUS)
                     .put(Constants.MATCHED_CREDENTIALS, Constants.MATCHED_CREDENTIALS);
 
             batchFutures.add(
-                    repository.upsert(batch, conflictCols, onConflictUpdateCol, Constants.DATABASE_TABLE_DISCOVERY_QUEUE)
+                    repository.upsert(batch, new JsonArray().add(Constants.DISCOVERY_ID).add(Constants.DEVICE_IP), onConflictUpdateCol, Constants.DATABASE_TABLE_DISCOVERY_QUEUE)
                             .onSuccess(v -> logger.info("Inserted batch {}-{} into discovery_queue", finalFrom, to))
                             .onFailure(err -> logger.error("Failed to insert batch {}-{} in to discovery_queue : {}", finalFrom, to, err.getMessage()))
                             .mapEmpty()
@@ -259,9 +257,9 @@ public class DiscoveryService extends AbstractVerticle {
 
                     for (Object device : batch) {
 
-                        JsonObject deviceAsJson = (JsonObject) device;
+                        var deviceAsJson = (JsonObject) device;
 
-                        String ip = deviceAsJson.getString(Constants.DEVICE_IP);
+                        var ip = deviceAsJson.getString(Constants.DEVICE_IP);
 
                         int port = deviceAsJson.getInteger(Constants.PORT);
 
@@ -359,7 +357,7 @@ public class DiscoveryService extends AbstractVerticle {
                 })
                 .compose(status -> {
 
-                    JsonObject deviceObj = new JsonObject()
+                    var deviceObj = new JsonObject()
                             .put(Constants.DISCOVERY_ID, discoveryId)
                             .put(Constants.DEVICE_IP, ip)
                             .put(Constants.PORT, port)

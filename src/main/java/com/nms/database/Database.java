@@ -75,7 +75,7 @@ public class Database extends AbstractVerticle {
 
         try {
 
-            logger.debug("Incoming DB body: {}", body.encodePrettily());
+//            logger.debug("Incoming DB body: {}", body.encodePrettily());
 
             var result = QueryBuilder.buildQuery(body);
 
@@ -150,7 +150,7 @@ public class Database extends AbstractVerticle {
 
             JsonObject json = new JsonObject();
 
-            for (int i = 0; i < row.size(); i++) {
+            for (var i = 0; i < row.size(); i++) {
 
                 var column = row.getColumnName(i);
 
@@ -203,13 +203,13 @@ public class Database extends AbstractVerticle {
                                     for (Row row : rowSet) {
 
                                         result.add(new JsonObject()
-                                                .put("id", row.getLong("id"))
-                                                .put("discovery_id", row.getInteger("discovery_id"))
-                                                .put("device_ip", row.getString("device_ip"))
-                                                .put("port", row.getInteger("port"))
-                                                .put("protocol", row.getString("protocol"))
-                                                .put("status", row.getString("status"))
-                                                .put("matched_credentials", row.getJsonArray("matched_credentials"))
+                                                .put(Constants.ID, row.getLong(Constants.ID))
+                                                .put(Constants.DISCOVERY_ID, row.getInteger(Constants.DISCOVERY_ID))
+                                                .put(Constants.DEVICE_IP, row.getString(Constants.DEVICE_IP))
+                                                .put(Constants.PORT, row.getInteger(Constants.PORT))
+                                                .put(Constants.PROTOCOL, row.getString(Constants.PROTOCOL))
+                                                .put(Constants.STATUS, row.getString(Constants.STATUS))
+                                                .put(Constants.MATCHED_CREDENTIALS, row.getJsonArray(Constants.MATCHED_CREDENTIALS))
                                         );
                                     }
                                     return result;

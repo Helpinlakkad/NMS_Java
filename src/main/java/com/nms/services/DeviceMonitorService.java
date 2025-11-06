@@ -39,7 +39,7 @@ public class DeviceMonitorService extends AbstractVerticle {
         // 🧩 Start provision + polling
         vertx.eventBus().<JsonObject>consumer(AppConfig.EB_START_PROVISION, message -> {
 
-            JsonObject body = message.body();
+            var body = message.body();
 
             var discoveryIdStr = body.getString(Constants.DISCOVERY_PROFILE_ID);
 
@@ -204,7 +204,7 @@ public class DeviceMonitorService extends AbstractVerticle {
 
         var conflictColArr = new JsonArray().add(Constants.DISCOVERY_ID);
 
-        JsonObject onConflictUpdateCols = new JsonObject()
+        var onConflictUpdateCols = new JsonObject()
                 .put("polling_started_at", "now()")
                 .put("polling_status", "'ACTIVE'");
 

@@ -103,14 +103,14 @@ public class ZMQCommunication extends AbstractVerticle {
 
         try {
 
-            JsonObject payload = message.body();
+            var payload = message.body();
 
             logger.debug("📨 Received payload on EB_ZMQ_SEND_TO_GO: {}", payload.encodePrettily());
 
-            JsonArray devicesArray = new JsonArray();
+            var devicesArray = new JsonArray();
 
             // Case A: payload.devices is an array
-            Object devicesVal = payload.getValue("devices");
+            var devicesVal = payload.getValue("devices");
 
             if (devicesVal instanceof JsonArray) {
 
@@ -141,7 +141,7 @@ public class ZMQCommunication extends AbstractVerticle {
 
             logger.info("📦 Sending {} devices individually to Go for discoveryId={}", devicesArray.size(), discoveryId);
 
-            for (int i = 0; i < devicesArray.size(); i++) {
+            for (var i = 0; i < devicesArray.size(); i++) {
 
                 JsonObject device = devicesArray.getJsonObject(i);
 
@@ -158,7 +158,7 @@ public class ZMQCommunication extends AbstractVerticle {
                         new PendingRequest(message, System.currentTimeMillis()));
 
                 // Send each device to Go
-                boolean sent = pushSocket.send(device.encode(), ZMQ.DONTWAIT);
+                var sent = pushSocket.send(device.encode(), ZMQ.DONTWAIT);
 
                 if (!sent) {
 
@@ -201,11 +201,11 @@ public class ZMQCommunication extends AbstractVerticle {
                 }
 
                 // Parse and process message
-                String jsonStr = msg.substring(AppConfig.ZMQ_TOPIC_RESULTS.length()).trim();
+                var jsonStr = msg.substring(AppConfig.ZMQ_TOPIC_RESULTS.length()).trim();
 
-                JsonObject response = new JsonObject(jsonStr);
+                var response = new JsonObject(jsonStr);
 
-                String requestId = response.getString(REQUEST_ID);
+                var requestId = response.getString(REQUEST_ID);
 
                 if (requestId != null && pendingRequests.containsKey(requestId)) {
 
@@ -249,7 +249,7 @@ public class ZMQCommunication extends AbstractVerticle {
 
     private void checkTimeouts() {
 
-        long now = System.currentTimeMillis();
+        var now = System.currentTimeMillis();
 
         pendingRequests.entrySet().removeIf(entry -> {
 

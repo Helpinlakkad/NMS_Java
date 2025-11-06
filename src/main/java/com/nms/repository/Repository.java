@@ -219,8 +219,19 @@ public class Repository {
                     vertx.runOnContext(v -> {
 
                         fetchNextBatch(discoveryId, batchSize, offSet + batchSize, allBatches)
-                                .onSuccess(promise::complete)
-                                .onFailure(promise::fail);
+                                .onComplete(ar-> {
+
+                                    if (ar.succeeded()) {
+
+                                        promise.complete(ar.result());
+
+                                    } else {
+
+                                        promise.fail(ar.cause());
+
+                                    }
+
+                                });
 
                     });
 

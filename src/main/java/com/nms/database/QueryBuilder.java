@@ -207,9 +207,9 @@ public class QueryBuilder {
 
         }
 
-        JsonObject first = batchData.getJsonObject(0);
+        var first = batchData.getJsonObject(0);
 
-        List<String> keys = new ArrayList<>(first.fieldNames());
+        var keys = new ArrayList<>(first.fieldNames());
 
         var columnsPart = String.join(", ", keys);
 
@@ -220,7 +220,7 @@ public class QueryBuilder {
         query.append("INSERT INTO ").append(table).append(" (").append(columnsPart)
                 .append(") VALUES (").append(placeholders).append(")");
 
-        for (int i = 0; i < batchData.size(); i++) {
+        for (var i = 0; i < batchData.size(); i++) {
 
             JsonObject dataJson = batchData.getJsonObject(i);
 
@@ -270,7 +270,7 @@ public class QueryBuilder {
 
         if (condition.isEmpty()) {
 
-            logger.info(Constants.MESSAGE_MISSING_CONDITION);
+            logger.info("Query is : {}",query);
 
             return;
 
