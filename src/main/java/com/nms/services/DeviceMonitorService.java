@@ -22,7 +22,7 @@ public class DeviceMonitorService extends AbstractVerticle {
 
     private static final int BATCH_SIZE = 500;
 
-    private final Map<Integer, JsonArray> cachedDeviceBatches = new ConcurrentHashMap<>();
+    private static final Map<Integer, JsonArray> cachedDeviceBatches = new ConcurrentHashMap<>();
 
     public DeviceMonitorService(Repository repository) {
 

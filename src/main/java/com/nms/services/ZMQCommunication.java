@@ -19,7 +19,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Handles request–reply pattern between Vert.x and Go plugin services.
+ * Handles PUSH-PULL / PUB-SUB pattern between Vert.x and Go plugin services.
  * Tracks request timeouts and correlation using requestId.
  */
 public class ZMQCommunication extends AbstractVerticle {
@@ -41,7 +41,7 @@ public class ZMQCommunication extends AbstractVerticle {
     }
 
     // Request tracking
-    private static final Map<String, PendingRequest> pendingRequests = new ConcurrentHashMap<>();
+    private static final Map<String, Long> pendingRequests = new ConcurrentHashMap<>();
 
     private static final String REQUEST_ID = "requestId";
 
@@ -51,9 +51,6 @@ public class ZMQCommunication extends AbstractVerticle {
     private static final long REQUEST_TIMEOUT_MS = 120_000; // 2 minutes
 
     private static final long REQUEST_TIMEOUT_CHECK_INTERVAL = 10_000; // 10 seconds
-
-    private record PendingRequest(Message<JsonObject> message, long timestamp) {
-    }
 
     @Override
     public void start(Promise<Void> startPromise) {
@@ -154,8 +151,7 @@ public class ZMQCommunication extends AbstractVerticle {
                 device.put("timestamp", System.currentTimeMillis());
 
                 // Track each device request
-                pendingRequests.put(requestId,
-                        new PendingRequest(message, System.currentTimeMillis()));
+                pendingRequests.put(requestId, System.currentTimeMillis());
 
                 // Send each device to Go
                 var sent = pushSocket.send(device.encode(), ZMQ.DONTWAIT);
@@ -176,9 +172,7 @@ public class ZMQCommunication extends AbstractVerticle {
 
         } catch (Exception e) {
 
-            logger.error("Error sending per-device messages to Go: {}", e.getMessage(), e);
-
-            message.fail(500, "Internal ZMQ send error");
+            logger.error("Error sending per-device messages to Go: {}", e.getMessage());
 
         }
 
@@ -209,7 +203,7 @@ public class ZMQCommunication extends AbstractVerticle {
 
                 if (requestId != null && pendingRequests.containsKey(requestId)) {
 
-                    PendingRequest pending = pendingRequests.remove(requestId);
+                    pendingRequests.remove(requestId);
 
                     response.remove(REQUEST_ID);
 
@@ -225,8 +219,6 @@ public class ZMQCommunication extends AbstractVerticle {
 
                     repository.create(formattedResponse, Constants.DATABASE_TABLE_POLLING_RESULT)
                             .onFailure(err -> logger.error("Error in add Polling data : {}", err.getMessage()));
-
-                    pending.message.reply(response);
 
                 } else {
                     // If it's a general broadcast or unmatched response
@@ -253,11 +245,9 @@ public class ZMQCommunication extends AbstractVerticle {
 
         pendingRequests.entrySet().removeIf(entry -> {
 
-            if (now - entry.getValue().timestamp() >= REQUEST_TIMEOUT_MS) {
+            if (now - entry.getValue() >= REQUEST_TIMEOUT_MS) {
 
                 logger.warn("⏳ Request {} timed out", entry.getKey());
-
-                entry.getValue().message().fail(408, "Request timed out");
 
                 return true;
 
